@@ -42,4 +42,38 @@ if (-not (Test-Path $ConfigDir)) {
 }
 
 Write-Host "`n✨ Flowbot Installed Successfully!" -ForegroundColor Green
-Write-Host "Try running: flowbot doctor"
+Write-Host "Try running: nanobot doctor"
+
+# 4. Prompt for Service Installation (Task Scheduler)
+Write-Host "`n📋 Service Installation (Optional)" -ForegroundColor Cyan
+Write-Host "Would you like to install Nanobot as a system service?"
+Write-Host "This enables 24/7 background operation with auto-restart."
+$InstallService = Read-Host "Install as Task Scheduler service? [y/N]"
+
+if ($InstallService -match "^[Yy]$") {
+    Write-Host "🔧 Installing Task Scheduler service..." -ForegroundColor Cyan
+    
+    # Check if running as Administrator
+    $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    
+    if (-not $IsAdmin) {
+        Write-Host "⚠️  Administrator privileges required for service installation." -ForegroundColor Yellow
+        Write-Host "Please run this command as Administrator:"
+        Write-Host "  nanobot service install" -ForegroundColor White
+    } else {
+        $ServiceInstall = & nanobot service install 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "✅ Service installed successfully!" -ForegroundColor Green
+            Write-Host "You can now:"
+            Write-Host "  - Start service: nanobot service start"
+            Write-Host "  - Check status:  nanobot service status"
+            Write-Host "  - View logs:     Get-Content ~\.nanobot\logs\nanobot.log -Tail 50 -Wait"
+        } else {
+            Write-Host "⚠️  Service installation failed." -ForegroundColor Yellow
+            Write-Host "You can install it manually later with: nanobot service install"
+        }
+    }
+} else {
+    Write-Host "Skipped service installation."
+    Write-Host "You can install it later with: nanobot service install"
+}

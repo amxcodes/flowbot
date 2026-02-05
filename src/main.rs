@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 // Import modules from the library
-use flowbot_rs::{config, oauth, tui, doctor, tools, antigravity, telegram, gateway};
+use flowbot_rs::{config, oauth, tui, doctor, tools, antigravity, telegram, gateway, security}; // Added security
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -45,6 +45,9 @@ enum Commands {
         /// Provider to use (antigravity, openai, openrouter)
         #[arg(short, long)]
         provider: Option<String>,
+        /// Enable Rich Terminal UI
+        #[arg(long)]
+        tui: bool,
     },
     /// Send a single message (CLI mode)
     Agent {
@@ -83,6 +86,40 @@ enum Commands {
         #[arg(short, long, default_value = "3000")]
         port: u16,
     },
+    /// Security Auditing Tools
+    Security {
+        #[command(subcommand)]
+        action: SecurityAction,
+    },
+    /// Memory Management
+    Memory {
+        #[command(subcommand)]
+        action: MemoryAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum MemoryAction {
+    /// Show memory statistics (indexed files, vector count, DB size)
+    Status,
+    /// Wipe all vectors from the memory store
+    Clean {
+        /// Skip confirmation prompt
+        #[arg(long)]
+        force: bool,
+    },
+    /// Re-index all workspace files
+    Reindex {
+        /// Workspace directory to index
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum SecurityAction {
+    /// Audit system security (file permissions, config, known risks)
+    Audit,
 }
 
 #[derive(Subcommand, Debug)]
@@ -212,8 +249,12 @@ async fn main() -> Result<()> {
         Commands::Doctor => {
             doctor::run_doctor().await?;
         }
-        Commands::Chat { provider } => {
-            run_tui_chat(provider).await?;
+        Commands::Chat { provider, tui } => {
+            if tui {
+                run_rich_tui_chat(provider).await?;
+            } else {
+                run_legacy_chat(provider).await?;
+            }
         }
         Commands::Agent { message, provider, model } => {
             run_cli_agent(&message, provider, model).await?;
@@ -414,12 +455,228 @@ async fn main() -> Result<()> {
             let gateway = gateway::Gateway::new(config, agent_tx);
             gateway.start().await?;
         }
+        Commands::Security { action } => {
+            match action {
+                SecurityAction::Audit => {
+                    let mut auditor = security::audit::SecurityAuditor::new();
+                    println!("🔎 Running Security Audit...");
+                    if let Err(e) = auditor.run_all_checks() {
+                        eprintln!("❌ Error running checks: {}", e);
+                    }
+                    auditor.print_report();
+                }
+            }
+        }
+        Commands::Memory { action } => {
+            use flowbot_rs::memory::MemoryManager;
+            
+            let db_path = PathBuf::from(".").join(".nanobot").join("memory.db");
+            if let Some(parent) = db_path.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            
+            match action {
+                MemoryAction::Status => {
+                    println!("📊 Memory Status\n");
+                    
+                    // Check if DB exists
+                    if !db_path.exists() {
+                        println!("⚠️  Memory database not found at: {}", db_path.display());
+                        println!("💡 Run 'flowbot memory reindex' to create and populate the memory store.");
+                        return Ok(());
+                    }
+                    
+                    // Get DB file size
+                    let db_size = std::fs::metadata(&db_path)?.len();
+                    let db_size_mb = db_size as f64 / (1024.0 * 1024.0);
+                    
+                    println!("📁 Database: {}", db_path.display());
+                    println!("💾 Size: {:.2} MB", db_size_mb);
+                    
+                    // TODO: Query MemoryManager for vector count
+                    // This would require adding a stats() method to MemoryManager
+                    println!("\n💡 For detailed stats, use the MemoryManager API");
+                }
+                MemoryAction::Clean { force } => {
+                    if !force {
+                        print!("⚠️  This will delete all indexed vectors. Continue? (y/N): ");
+                        use std::io::{self, Write};
+                        io::stdout().flush()?;
+                        
+                        let mut response = String::new();
+                        io::stdin().read_line(&mut response)?;
+                        
+                        if response.trim().to_lowercase() != "y" {
+                            println!("❌ Cancelled.");
+                            return Ok(());
+                        }
+                    }
+                    
+                    println!("🧹 Cleaning memory store...");
+                    
+                    if db_path.exists() {
+                        std::fs::remove_file(&db_path)?;
+                        println!("✅ Memory store cleaned.");
+                    } else {
+                        println!("ℹ️  Memory store does not exist.");
+                    }
+                }
+                MemoryAction::Reindex { workspace } => {
+                    println!("🔄 Re-indexing workspace...");
+                    
+                    let workspace_path = workspace
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| std::env::current_dir().unwrap());
+                    
+                    println!("📂 Workspace: {}", workspace_path.display());
+                    
+                    // Initialize memory manager
+                    let provider = flowbot_rs::memory::EmbeddingProvider::local()?;
+                    let mut manager = MemoryManager::new(db_path.clone(), provider);
+                    
+                    // Simple scan: find all .rs, .md, .txt files
+                    println!("🔍 Scanning files...");
+                    let mut files = Vec::new();
+                    for entry in walkdir::WalkDir::new(&workspace_path)
+                        .max_depth(5)
+                        .into_iter()
+                        .filter_map(|e| e.ok())
+                    {
+                        if entry.file_type().is_file() {
+                            if let Some(ext) = entry.path().extension() {
+                                let ext_str = ext.to_str().unwrap_or("");
+                                if ["rs", "md", "txt", "toml", "json"].contains(&ext_str) {
+                                    files.push(entry.path().to_path_buf());
+                                }
+                            }
+                        }
+                    }
+                    
+                    println!("📄 Found {} files", files.len());
+                    
+                    // Batch process
+                    for file in files {
+                        if let Ok(content) = tokio::fs::read_to_string(&file).await {
+                            let mut metadata = std::collections::HashMap::new();
+                            metadata.insert("path".to_string(), file.display().to_string());
+                            
+                            if let Err(e) = manager.add_document(&content, metadata).await {
+                                eprintln!("⚠️  Failed to index {}: {}", file.display(), e);
+                            } else {
+                                println!("✓ {}", file.display());
+                            }
+                        }
+                    }
+                    
+                    println!("\n✅ Re-indexing complete!");
+                }
+            }
+        }
     }
 
     Ok(())
 }
 
-async fn run_tui_chat(provider: Option<String>) -> Result<()> {
+async fn run_rich_tui_chat(provider: Option<String>) -> Result<()> {
+    // Initialize TUI Logger
+    flowbot_rs::ui::logger::LoggerService::init()?;
+    
+    // Start TUI Manager
+    let mut tui = flowbot_rs::ui::tui::TuiManager::new()?;
+    tui.start()?;
+
+    // Load Config and Provider
+    let config = config::Config::load()?;
+    let provider_name = provider.unwrap_or(config.default_provider.clone());
+    let preamble = format!(
+        "You are FlowBot, a helpful AI assistant with tool access.\n{}",
+        tools::executor::get_tool_descriptions()
+    );
+
+    // Initialize Persistence
+    let db_path = PathBuf::from(".").join(".nanobot").join("sessions.db");
+    if let Some(parent) = db_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+    }
+    let persistence = PersistenceManager::new(db_path);
+    persistence.init()?;
+    let session_id = Uuid::new_v4().to_string();
+
+    log::info!("Starting session: {}", session_id);
+    log::info!("Provider: {}", provider_name);
+    log::info!("Type your message and press Enter. Ctrl+C to quit.");
+
+    // Setup Agent
+    // Note: We need to box the agent to handle different types if we wanted to be generic,
+    // but for now let's just use the same match logic as legacy.
+    
+    match provider_name.as_str() {
+        "antigravity" => {
+            let client = antigravity::AntigravityClient::from_env().await?;
+            let agent = client.agent("gemini-2.5-flash").preamble(&preamble).build();
+            run_rich_loop(tui, agent, &persistence, &session_id).await
+        }
+        _ => {
+            let client = get_openai_like_client(&provider_name, &config)?;
+            let model_name = match provider_name.as_str() {
+                "openrouter" => "anthropic/claude-3.5-sonnet",
+                "openai" => "gpt-4-turbo",
+                _ => "gpt-4o",
+            };
+            let agent = client.agent(model_name).preamble(&preamble).build();
+            run_rich_loop(tui, agent, &persistence, &session_id).await
+        }
+    }
+}
+
+async fn run_rich_loop<P: Prompt>(
+    mut tui: flowbot_rs::ui::tui::TuiManager,
+    agent: P,
+    persistence: &PersistenceManager,
+    session_id: &str,
+) -> Result<()> {
+    loop {
+        // Wait for input
+        let input_opt = tui.wait_for_input().await?;
+        
+        match input_opt {
+            Some(input) => {
+                if input.trim().is_empty() { continue; }
+                if input.trim() == "/quit" { break; }
+                
+                log::info!("> {}", input);
+                persistence.save_message(session_id, "user", &input).ok();
+                
+                // Prompt Agent (this blocks TUI drawing currently)
+                // TODO: Move to background task for non-blocking UI
+                match agent.prompt(&input).await {
+                    Ok(response) => {
+                        log::info!("Bot: {}", response);
+                        persistence.save_message(session_id, "assistant", &response).ok();
+                        
+                        // Handle tool calls if any (basic support for now)
+                        if tools::executor::is_tool_call(&response) {
+                             log::info!("🔧 Executing tool...");
+                             match tools::executor::execute_tool(&response, None, None, None).await {
+                                Ok(res) => log::info!("✓ Result: {}", res),
+                                Err(e) => log::error!("✗ Error: {}", e),
+                             }
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Error parsing response: {}", e);
+                    }
+                }
+            }
+            None => break, // Quit
+        }
+    }
+    
+    tui.stop()?;
+    Ok(())
+}
+
+async fn run_legacy_chat(provider: Option<String>) -> Result<()> {
     let config = config::Config::load()?;
     let provider_name = provider.unwrap_or(config.default_provider.clone());
 

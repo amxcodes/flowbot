@@ -73,32 +73,25 @@ pub async fn execute_tool(
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("Missing 'tool' field"))?;
     
-    match tool_name {
-        // ... (File/Web tools skipped for brevity, assumed unchanged) ...
-        "read_file" => {
-            let args = ReadFileArgs {
-                path: tool_call["path"]
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("Missing 'path' field"))?
-                    .to_string(),
-            };
-            read_file(args).await
-        }
+    // Try ToolRegistry first (for simple, modular tools)
+    let registry = super::definitions::get_tool_registry();
+    if let Some(tool) = registry.get(tool_name) {
+        // Extract args (everything except "tool" field)
+        let args = if let Some(obj) = tool_call.as_object() {
+            let mut args_obj = obj.clone();
+            args_obj.remove("tool");
+            serde_json::Value::Object(args_obj)
+        } else {
+            tool_call.clone()
+        };
         
-        "write_file" => {
-            let args = WriteFileArgs {
-                path: tool_call["path"]
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("Missing 'path' field"))?
-                    .to_string(),
-                content: tool_call["content"]
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("Missing 'content' field"))?
-                    .to_string(),
-                overwrite: tool_call["overwrite"].as_bool().unwrap_or(false),
-            };
-            write_file(args).await
-        }
+        return tool.execute(args).await;
+    }
+    
+    // Fall back to legacy match for complex tools that need context
+    match tool_name {
+        // Simple tools (read_file, write_file, list_directory, web_search, run_command)
+        // are now handled by the registry above
         
         "edit_file" => {
             let args = EditFileArgs {
@@ -117,68 +110,6 @@ pub async fn execute_tool(
                 all_occurrences: tool_call["all_occurrences"].as_bool().unwrap_or(false),
             };
             edit_file(args).await
-        }
-        
-        "list_directory" => {
-            let args = ListDirArgs {
-                path: tool_call["path"]
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("Missing 'path' field"))?
-                    .to_string(),
-                max_depth: tool_call["max_depth"].as_u64().map(|n| n as usize),
-            };
-            let files = list_directory(args).await?;
-            Ok(serde_json::to_string_pretty(&files)?)
-        }
-        
-        "web_search" => {
-            let args = WebSearchArgs {
-                query: tool_call["query"]
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("Missing 'query' field"))?
-                    .to_string(),
-                max_results: tool_call["max_results"].as_u64().unwrap_or(5) as usize,
-            };
-            let results = web_search(args).await?;
-            Ok(serde_json::to_string_pretty(&results)?)
-        }
-        
-        "run_command" => {
-            let args = RunCommandArgs {
-                command: tool_call["command"]
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("Missing 'command' field"))?
-                    .to_string(),
-                args: tool_call["args"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-                use_docker: tool_call["use_docker"].as_bool().unwrap_or(false),
-                docker_image: None,
-            };
-            
-            // Dispatch to appropriate executor
-            let output = if args.use_docker {
-                super::docker::run_docker_command(args).await?
-            } else {
-                run_command(args).await?
-            };
-            
-            // Format detailed exit status
-            let status = if output.success {
-                "Success".to_string()
-            } else {
-                format!("Failed (Exit Code: {})", output.exit_code)
-            };
-
-            Ok(format!(
-                "Status: {}\nStdout:\n{}\nStderr:\n{}",
-                status, output.stdout, output.stderr
-            ))
         }
         
         "spawn_process" => {

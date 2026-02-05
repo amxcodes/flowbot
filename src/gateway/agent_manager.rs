@@ -57,6 +57,8 @@ pub enum TaskStatus {
 pub struct AgentManager {
     sessions: Arc<Mutex<HashMap<String, AgentSession>>>,
     tasks: Arc<Mutex<HashMap<String, SessionTask>>>,
+    /// Subagent hierarchy registry (parent_id -> Vec<child_id>)
+    hierarchy: Arc<Mutex<HashMap<String, Vec<String>>>>,
 }
 
 impl AgentManager {
@@ -64,6 +66,7 @@ impl AgentManager {
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             tasks: Arc::new(Mutex::new(HashMap::new())),
+            hierarchy: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -155,8 +158,6 @@ impl AgentManager {
         cleanup_policy: CleanupPolicy,
     ) -> Result<(AgentSession, SessionTask)> {
         // Create isolated session
-        // Note: create_session calls save_registry, so we might save twice here.
-        // Optimization: Create internal method without save, or just accept overhead for now.
         let session = self
             .create_session(
                 SessionType::Isolated,
@@ -183,6 +184,16 @@ impl AgentManager {
             let mut tasks = self.tasks.lock().await;
             tasks.insert(task_obj.id.clone(), task_obj.clone());
         }
+        
+        // Track hierarchy relationship
+        {
+            let mut hierarchy = self.hierarchy.lock().await;
+            hierarchy
+                .entry(parent_session_id.clone())
+                .or_insert_with(Vec::new)
+                .push(session.id.clone());
+        }
+        
         self.save_registry().await?;
 
         Ok((session, task_obj))
@@ -226,6 +237,29 @@ impl AgentManager {
         } else {
             Err(anyhow::anyhow!("Task not found: {}", task_id))
         }
+    }
+
+    /// Get all child session IDs for a parent
+    pub async fn get_children(&self, parent_session_id: &str) -> Vec<String> {
+        let hierarchy = self.hierarchy.lock().await;
+        hierarchy.get(parent_session_id).cloned().unwrap_or_default()
+    }
+    
+    /// Get task by session ID  
+    pub async fn get_task_by_session(&self, session_id: &str) -> Option<SessionTask> {
+        let tasks = self.tasks.lock().await;
+        tasks.values()
+            .find(|t| t.session_id == session_id)
+            .cloned()
+    }
+    
+    /// Get all tasks for a session
+    pub async fn get_session_tasks(&self, session_id: &str) -> Vec<SessionTask> {
+        let tasks = self.tasks.lock().await;
+        tasks.values()
+            .filter(|t| t.session_id == session_id)
+            .cloned()
+            .collect()
     }
 
     /// Cleanup completed isolated sessions based on policy

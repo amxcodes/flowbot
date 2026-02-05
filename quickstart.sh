@@ -26,7 +26,7 @@ echo "✓ Configuration found"
 echo ""
 
 # Check if built
-if [ ! -f "target/release/nanobot-rs" ]; then
+if [ ! -f "target/release/nanobot" ]; then
     echo "🔨 Building (first time - may take 5-10 minutes)..."
     cargo build --release
     echo "✓ Build complete"

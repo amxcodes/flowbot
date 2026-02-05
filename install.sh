@@ -29,4 +29,27 @@ cargo install --path . --force
 mkdir -p "$HOME/.nanobot"
 
 echo -e "\n\033[0;32m✨ Installation Complete!\033[0m"
-echo -e "You can now run: \033[1mflowbot doctor\033[0m"
+echo -e "You can now run: \033[1mnanobot doctor\033[0m"
+
+# 4. Prompt for Service Installation (systemd)
+echo -e "\n\033[0;36m📋 Service Installation (Optional)\033[0m"
+echo "Would you like to install Nanobot as a system service?"
+echo "This enables 24/7 background operation with auto-restart."
+read -p "Install as systemd service? [y/N] " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    echo -e "\033[0;36m🔧 Installing systemd service...\033[0m"
+    if nanobot service install; then
+        echo -e "\033[0;32m✅ Service installed successfully!\033[0m"
+        echo -e "You can now:"
+        echo -e "  - Start service: \033[1mnanobot service start\033[0m"
+        echo -e "  - Check status:  \033[1mnanobot service status\033[0m"
+        echo -e "  - View logs:     \033[1mjournalctl --user -u nanobot -f\033[0m"
+    else
+        echo -e "\033[0;33m⚠️  Service installation failed.\033[0m"
+        echo "You can install it manually later with: nanobot service install"
+    fi
+else
+    echo "Skipped service installation."
+    echo "You can install it later with: nanobot service install"
+fi

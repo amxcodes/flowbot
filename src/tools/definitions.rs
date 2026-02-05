@@ -1,356 +1,171 @@
-use serde::{Deserialize, Serialize};
-use serde_json::json;
+use async_trait::async_trait;
+use serde_json::Value;
+use anyhow::Result;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolDefinition {
-    pub name: String,
-    pub description: String,
-    pub parameters: serde_json::Value,
+/// A standardized interface for agent tools.
+/// This trait matches the OpenClaw plugin architecture, allowing tools to be
+/// defined as self-contained units rather than part of a monolithic switch statement.
+#[async_trait]
+pub trait Tool: Send + Sync {
+    /// The unique name of the tool (e.g., "read_file", "run_command")
+    fn name(&self) -> &str;
+    
+    /// A human-readable description of what the tool does
+    fn description(&self) -> &str;
+    
+    /// The input schema for the tool (JSON Schema)
+    fn schema(&self) -> Value;
+    
+    /// Execute the tool with the provided arguments
+    async fn execute(&self, args: Value) -> Result<String>;
+    
+    /// Validate arguments against a policy (optional, default is no validation)
+    fn validate_args(&self, args: &Value, policy: &super::policy::ToolPolicy) -> Result<(), super::policy::PolicyViolation> {
+        // Default implementation: no validation
+        let _ = (args, policy);  // Suppress unused warnings
+        Ok(())
+    }
 }
 
-/// Returns all available FlowBot tools (inspired by pi-coding-agent)
-pub fn get_tool_declarations() -> Vec<ToolDefinition> {
+/// Registry for managing available tools
+pub struct ToolRegistry {
+    tools: std::collections::HashMap<String, Box<dyn Tool>>,
+}
+
+impl ToolRegistry {
+    pub fn new() -> Self {
+        Self {
+            tools: std::collections::HashMap::new(),
+        }
+    }
+    
+    pub fn register(&mut self, tool: Box<dyn Tool>) {
+        self.tools.insert(tool.name().to_string(), tool);
+    }
+    
+    pub fn get(&self, name: &str) -> Option<&Box<dyn Tool>> {
+        self.tools.get(name)
+    }
+    
+    pub fn list_tools(&self) -> Vec<Value> {
+        self.tools.values().map(|t| t.schema()).collect()
+    }
+    
+    /// Execute a tool with policy validation
+    pub async fn execute_with_policy(
+        &self,
+        tool_name: &str,
+        args: Value,
+        policy: &super::policy::ToolPolicy,
+    ) -> Result<String> {
+        // Check if tool is allowed by policy
+        policy.check_tool_allowed(tool_name)
+            .map_err(|e| anyhow::anyhow!("Policy violation: {}", e))?;
+        
+        // Get the tool
+        let tool = self.get(tool_name)
+            .ok_or_else(|| anyhow::anyhow!("Unknown tool: {}", tool_name))?;
+        
+        // Validate arguments against policy
+        tool.validate_args(&args, policy)
+            .map_err(|e| anyhow::anyhow!("Policy violation: {}", e))?;
+        
+        // Execute the tool
+        tool.execute(args).await
+    }
+}
+
+/// Backward compatibility: Get tool declarations for Antigravity
+pub fn get_tool_declarations() -> Vec<Value> {
     vec![
-        // Tool 1: read_file - Read file contents
-        ToolDefinition {
-            name: "read_file".to_string(),
-            description: "Read the contents of a file".to_string(),
-            parameters: json!({
+        // File System Tools
+        serde_json::json!({
+            "name": "read_file",
+            "description": "Read contents of a file",
+            "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Path to the file to read"
-                    }
+                    "path": {"type": "string", "description": "Absolute path to the file"}
                 },
                 "required": ["path"]
-            }),
-        },
-        // Tool 2: write_file - Create or overwrite a file
-        ToolDefinition {
-            name: "write_file".to_string(),
-            description: "Create or overwrite a file with new content".to_string(),
-            parameters: json!({
+            }
+        }),
+        serde_json::json!({
+            "name": "write_file",
+            "description": "Write content to a file",
+            "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Path to the file to write"
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "Content to write to the file"
-                    },
-                    "overwrite": {
-                        "type": "boolean",
-                        "description": "Overwrite if file exists (default: false)"
-                    }
+                    "path": {"type": "string", "description": "Absolute path to the file"},
+                    "content": {"type": "string", "description": "Content to write"}
                 },
                 "required": ["path", "content"]
-            }),
-        },
-        // Tool 3: edit_file - Make precise edits to a file
-        ToolDefinition {
-            name: "edit_file".to_string(),
-            description: "Make precise edits to a file by replacing text".to_string(),
-            parameters: json!({
+            }
+        }),
+        serde_json::json!({
+            "name": "list_directory",
+            "description": "List files and subdirectories in a directory",
+            "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Path to the file to edit"
-                    },
-                    "old_text": {
-                        "type": "string",
-                        "description": "Exact text to find and replace"
-                    },
-                    "new_text": {
-                        "type": "string",
-                        "description": "New text to insert"
-                    },
-                    "all_occurrences": {
-                        "type": "boolean",
-                        "description": "Replace all occurrences (default: false)"
-                    }
-                },
-                "required": ["path", "old_text", "new_text"]
-            }),
-        },
-        // Tool 4: list_directory - List files in a directory
-        ToolDefinition {
-            name: "list_directory".to_string(),
-            description: "List files in a directory".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Directory path to list"
-                    },
-                    "max_depth": {
-                        "type": "integer",
-                        "description": "Maximum recursion depth (default: 1)"
-                    }
+                    "path": {"type": "string", "description": "Absolute path to the directory"}
                 },
                 "required": ["path"]
-            }),
-        },
-        // Tool 5: web_search - Search the web
-        ToolDefinition {
-            name: "web_search".to_string(),
-            description: "Search the web".to_string(),
-            parameters: json!({
+            }
+        }),
+        // Web Tools
+        serde_json::json!({
+            "name": "web_search",
+            "description": "Search the web using DuckDuckGo",
+            "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Search query"
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "description": "Maximum number of results (default: 5)"
-                    }
+                    "query": {"type": "string", "description": "Search query"},
+                    "num_results": {"type": "integer", "description": "Number of results (default: 5)"}
                 },
                 "required": ["query"]
-            }),
-        },
-        // Tool 6: run_command - Execute system commands
-        ToolDefinition {
-            name: "run_command".to_string(),
-            description: "Execute a system command and return the output".to_string(),
-            parameters: json!({
+            }
+        }),
+        // Command Execution
+        serde_json::json!({
+            "name": "run_command",
+            "description": "Execute a system command",
+            "parameters": {
                 "type": "object",
                 "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "Command to execute"
-                    },
-                    "args": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Command arguments"
-                    },
-                    "use_docker": {
-                        "type": "boolean",
-                        "description": "Run in a container (default: false)"
-                    }
+                    "command": {"type": "string", "description": "Command to execute"},
+                    "args": {"type": "array", "items": {"type": "string"}, "description": "Command arguments"},
+                    "use_docker": {"type": "boolean", "description": "Run in Docker"}
                 },
                 "required": ["command"]
-            }),
-        },
-        // Tool 7: spawn_process - Start a background process
-        ToolDefinition {
-            name: "spawn_process".to_string(),
-            description: "Start a background process and return its PID".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "Command to execute"
-                    },
-                    "args": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Command arguments"
-                    }
-                },
-                "required": ["command"]
-            }),
-        },
-        // Tool 8: read_process_output - Read output from a background process
-        ToolDefinition {
-            name: "read_process_output".to_string(),
-            description: "Read and clear the output buffer of a background process".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "pid": {
-                        "type": "string",
-                        "description": "Process ID (PID) returned by spawn_process"
-                    }
-                },
-                "required": ["pid"]
-            }),
-        },
-        // Tool 9: kill_process - Terminate a background process
-        ToolDefinition {
-            name: "kill_process".to_string(),
-            description: "Terminate a background process".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "pid": {
-                        "type": "string",
-                        "description": "Process ID (PID) returned by spawn_process"
-                    }
-                },
-                "required": ["pid"]
-            }),
-        },
-        // Tool 10: list_processes - List all background processes
-        ToolDefinition {
-            name: "list_processes".to_string(),
-            description: "List all running background processes".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {},
-                "required": []
-            }),
-        },
-        // Tool 11: web_fetch - Download and extract content from a URL
-        ToolDefinition {
-            name: "web_fetch".to_string(),
-            description: "Download content from a URL and extract text (strips HTML)".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "URL to fetch"
-                    }
-                },
-                "required": ["url"]
-            }),
-        },
-        // Tool 12: write_process_input - Send input to stdin
-        ToolDefinition {
-            name: "write_process_input".to_string(),
-            description: "Send text input to a running process (useful for interactive prompts)".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "pid": {
-                        "type": "string",
-                        "description": "Process ID"
-                    },
-                    "input": {
-                        "type": "string",
-                        "description": "Input text to send (include newline \\n if needed)"
-                    }
-                },
-                "required": ["pid", "input"]
-            }),
-        },
-        // Tool 13: cron - Manage scheduled tasks
-        ToolDefinition {
-            name: "cron".to_string(),
-            description: "Manage cron jobs for time-based task automation (status/list/add/update/remove/run/runs/wake)".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "action": {
-                        "type": "string",
-                        "description": "Action to perform",
-                        "enum": ["status", "list", "add", "update", "remove", "run", "runs", "wake"]
-                    },
-                    "includeDisabled": {
-                        "type": "boolean",
-                        "description": "Include disabled jobs in list (default: false)"
-                    },
-                    "job": {
-                        "type": "object",
-                        "description": "Job definition for 'add' action"
-                    },
-                    "jobId": {
-                        "type": "string",
-                        "description": "Job ID for update/remove/run/runs actions"
-                    },
-                    "patch": {
-                        "type": "object",
-                        "description": "Job updates for 'update' action"
-                    },
-                    "text": {
-                        "type": "string",
-                        "description": "Wake event text for 'wake' action"
-                    },
-                    "mode": {
-                        "type": "string",
-                        "description": "Wake mode: 'now' or 'next-heartbeat'",
-                        "enum": ["now", "next-heartbeat"]
-                    }
-                },
-                "required": ["action"]
-            }),
-        },
-        // Tool 14: sessions_spawn - Create isolated subagent
-        ToolDefinition {
-            name: "sessions_spawn".to_string(),
-            description: "Spawn a background sub-agent in an isolated session to handle a specific task".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "task": {
-                        "type": "string",
-                        "description": "Task description for the subagent"
-                    },
-                    "label": {
-                        "type": "string",
-                        "description": "Human-readable label for the subagent (optional)"
-                    },
-                    "model": {
-                        "type": "string",
-                        "description": "Model override for subagent (optional)"
-                    },
-                    "cleanup": {
-                        "type": "string",
-                        "description": "Cleanup policy: 'keep' or 'delete' (default: keep)",
-                        "enum": ["keep", "delete"]
-                    }
-                },
-                "required": ["task"]
-            }),
-        },
+            }
+        }),
     ]
-
-
-
-
-
 }
 
-/// Convert tool definitions to Gemini API function_declarations format
-pub fn to_gemini_tools(tools: Vec<ToolDefinition>) -> serde_json::Value {
-    json!([{
-        "function_declarations": tools.iter().map(|tool| {
-            json!({
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": tool.parameters
-            })
-        }).collect::<Vec<_>>()
-    }])
+/// Backward compatibility: Convert tool declarations to Gemini format
+pub fn to_gemini_tools(declarations: Vec<Value>) -> Value {
+    // Gemini API expects: { "function_declarations": [...] }
+    serde_json::json!({
+        "function_declarations": declarations
+    })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_tool_declarations() {
-        let tools = get_tool_declarations();
-        assert_eq!(tools.len(), 14);
-        assert_eq!(tools[0].name, "read_file");
-        // ...
-        assert_eq!(tools[11].name, "write_process_input");
-        assert_eq!(tools[12].name, "cron");
-        assert_eq!(tools[13].name, "sessions_spawn");
-    }
-
-    #[test]
-    fn test_gemini_format() {
-        let tools = get_tool_declarations();
-        let gemini_tools = to_gemini_tools(tools);
-
-        // Verify structure
-        assert!(gemini_tools.is_array());
-        assert!(gemini_tools[0]["function_declarations"].is_array());
-        assert_eq!(
-            gemini_tools[0]["function_declarations"]
-                .as_array()
-                .unwrap()
-                .len(),
-            14
-        );
-    }
+/// Global tool registry - lazily initialized
+pub fn get_tool_registry() -> &'static ToolRegistry {
+    use once_cell::sync::Lazy;
+    static REGISTRY: Lazy<ToolRegistry> = Lazy::new(|| {
+        let mut registry = ToolRegistry::new();
+        
+        // Register all implemented tools
+        registry.register(Box::new(super::read_file_tool::ReadFileTool));
+        registry.register(Box::new(super::write_file_tool::WriteFileTool));
+        registry.register(Box::new(super::list_directory_tool::ListDirectoryTool));
+        registry.register(Box::new(super::web_search_tool::WebSearchTool));
+        registry.register(Box::new(super::run_command_tool::RunCommandTool));
+        
+        registry
+    });
+    
+    &REGISTRY
 }

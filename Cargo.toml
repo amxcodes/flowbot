@@ -1,17 +1,11 @@
-[package]
-name = "flowbot-rs"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+members = [
+    "crates/nanobot-core",
+    "crates/nanobot-cli",
+]
+resolver = "2"
 
-[lib]
-name = "flowbot_rs"
-path = "src/lib.rs"
-
-[[bin]]
-name = "flowbot"
-path = "src/main.rs"
-
-[dependencies]
+[workspace.dependencies]
 anyhow = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive"] }
@@ -40,22 +34,21 @@ tokio-cron-scheduler = "0.13"
 thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# Telegram bot
+tracing-appender = "0.2"
+async-trait = "0.1"
+walkdir = "2.5"
 teloxide = { version = "0.12", features = ["macros"] }
 axum = { version = "0.7", features = ["ws"] }
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 tokio-stream = "0.1"
 eventsource-stream = "0.2"
 futures = "0.3"
-
-# Setup wizard dependencies
 dialoguer = "0.11"
 console = "0.15"
 indicatif = "0.17"
 colored = "3.1.1"
 toml = "0.9.11"
-
-# File Watching
 notify = "6.1"
 ignore = "0.4"
+tui-logger = "0.18.1"
+log = "0.4.29"

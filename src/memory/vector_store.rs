@@ -132,11 +132,21 @@ impl MemoryManager {
     pub async fn add_document(&self, content: &str, metadata: HashMap<String, String>) -> Result<()> {
         let embeddings = self.provider.embed(vec![content]).await?;
         let vector = embeddings[0].clone();
+        self.add_document_with_vector(content, metadata, &vector).await
+    }
+    
+    /// Internal method to add document with pre-computed vector
+    async fn add_document_with_vector(
+        &self,
+        content: &str,
+        metadata: HashMap<String, String>,
+        vector: &[f32],
+    ) -> Result<()> {
         let id = uuid::Uuid::new_v4().to_string();
         let path = metadata.get("path").map(|s| s.clone()).unwrap_or_default();
         
         let metadata_json = serde_json::to_string(&metadata)?;
-        let vector_blob = serde_json::to_vec(&vector)?;
+        let vector_blob = serde_json::to_vec(vector)?;
         let now = chrono::Utc::now().timestamp();
         
         // 1. Update SQLite
@@ -173,13 +183,55 @@ impl MemoryManager {
             id,
             content: content.to_string(),
             metadata,
-            vector,
+            vector: vector.to_vec(),
         };
         
         let mut lock = self.vector_cache.lock().unwrap();
         lock.push(entry);
         
         Ok(())
+    }
+    
+    /// Add multiple documents in batch (efficient for bulk indexing)
+    /// Returns the number of documents successfully added
+    pub async fn add_documents_batch(
+        &self,
+        documents: Vec<(String, HashMap<String, String>)>,  // (content, metadata)
+        batch_size: Option<usize>,
+    ) -> Result<usize> {
+        if documents.is_empty() {
+            return Ok(0);
+        }
+        
+        let batch_size = batch_size.unwrap_or(20); // Default: 20 for API rate limits
+        let mut added = 0;
+        
+        for chunk in documents.chunks(batch_size) {
+            // Extract contents for batch embedding
+            let contents: Vec<&str> = chunk.iter()
+                .map(|(content, _)| content.as_str())
+                .collect();
+            
+            // Single batched embed call
+            let embeddings = self.provider.embed(contents).await?;
+            
+            // Insert all documents in this batch
+            for (i, (content, metadata)) in chunk.iter().enumerate() {
+                self.add_document_with_vector(
+                    content,
+                    metadata.clone(),
+                    &embeddings[i]
+                ).await?;
+                added += 1;
+            }
+            
+            // Rate limiting: small delay between batches
+            if added < documents.len() {
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            }
+        }
+        
+        Ok(added)
     }
 
     pub fn remove_document_by_path(&self, path: &str) -> Result<()> {

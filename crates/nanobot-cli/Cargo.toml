@@ -1,0 +1,32 @@
+[package]
+name = "nanobot-cli"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "nanobot_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "nanobot"
+path = "src/main.rs"
+
+[dependencies]
+nanobot-core = { path = "../nanobot-core" }
+anyhow = { workspace = true }
+clap = { workspace = true }
+crossterm = { workspace = true }
+ratatui = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+colored = { workspace = true }
+tui-logger = { workspace = true }
+log = { workspace = true }
+tracing = { workspace = true }
+dirs = { workspace = true }
+rig-core = { workspace = true }
+uuid = { workspace = true }
+reqwest = { workspace = true }
+chrono = { workspace = true }
+walkdir = { workspace = true }
