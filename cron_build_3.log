@@ -1,0 +1,232 @@
+﻿cargo :     Checking 
+flowbot-rs v0.1.0 
+(C:\Users\AMAN ANU\De
+sktop\amxcodes\nanobo
+t\nanobot-rs-clean)
+At line:1 char:1
++ cargo check 2>&1 | 
+Out-File -FilePath 
+cron_build_3.log 
+-Encoding utf8
++ ~~~~~~~~~~~~~~~~
+    + CategoryInfo   
+           : NotSpe  
+  cified: (    Che   
+ cking fl...nobot    
+-rs-clean):Strin    
+g) [], RemoteExc    
+eption
+    + FullyQualified 
+   ErrorId : Native  
+  CommandError
+ 
+warning: unused 
+import: 
+`console::style`
+ --> src\doctor\teleg
+ram.rs:5:5
+  |
+5 | use 
+console::style;
+  |     
+^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unu
+sed_imports)]` on by 
+default
+
+error[E0308]: 
+mismatched types
+    --> src\agent\mod
+.rs:281:74
+     |
+ 281 |               
+  let args_value: 
+serde_json::Value = s
+erde_json::from_str(&
+tool_call.function.ar
+guments)
+     |               
+                     
+                 
+-------------------- 
+^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^ expected 
+`&str`, found 
+`&Value`
+     |               
+                     
+                 |
+     |               
+                     
+                 
+arguments to this 
+function are 
+incorrect
+     |
+     = note: 
+expected reference 
+`&str`
+                
+found reference 
+`&serde_json::Value`
+note: function 
+defined here
+    --> 
+C:\Users\AMAN ANU\.ca
+rgo\registry\src\inde
+x.crates.io-1949cf8c6
+b5b557f\serde_json-1.
+0.149\src\de.rs:2699:
+8
+     |
+2699 | pub fn 
+from_str<'a, T>(s: 
+&'a str) -> Result<T>
+     |        
+^^^^^^^^
+
+error[E0308]: 
+mismatched types
+   --> src\agent\mod.
+rs:296:34
+    |
+296 | ...            
+       Some(&self.cro
+n_scheduler),
+    |                
+       ---- 
+^^^^^^^^^^^^^^^^^^^^ 
+expected 
+`&AgentManager`, 
+found 
+`&CronScheduler`
+    |                
+       |
+    |                
+       arguments to 
+this enum variant 
+are incorrect
+    |
+    = note: expected 
+reference 
+`&AgentManager`
+               found 
+reference 
+`&CronScheduler`
+help: the type 
+constructed contains 
+`&CronScheduler` due 
+to the type of the 
+argument passed
+   --> src\agent\mod.
+rs:296:29
+    |
+296 | ...            
+       Some(&self.cro
+n_scheduler),
+    |                
+       ^^^^^---------
+-----------^
+    |                
+            |
+    |                
+            this 
+argument influences 
+the type of `Some`
+note: tuple variant 
+defined here
+   --> /rustc/1159e78
+c4747b02ef996e55082b7
+04c09b970588\library\
+core\src\option.rs:60
+1:5
+
+error[E0061]: this 
+function takes 3 
+arguments but 4 
+arguments were 
+supplied
+   --> src\agent\mod.
+rs:293:31
+    |
+293 |                
+         match crate:
+:tools::executor::exe
+cute_tool(
+    |                
+               ^^^^^^
+^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^
+294 |                
+             &tool_ca
+ll.function.name, 
+295 |                
+             
+args_value,
+    |                
+             
+---------- 
+unexpected argument 
+#2 of type 
+`serde_json::Value`
+    |
+note: function 
+defined here
+   --> src\tools\exec
+utor.rs:61:14
+    |
+ 61 | pub async fn 
+execute_tool(
+    |              
+^^^^^^^^^^^^
+help: remove the 
+extra argument
+    |
+294 -                
+             &tool_ca
+ll.function.name, 
+295 -                
+             
+args_value,
+294 +                
+             &tool_ca
+ll.function.name,
+    |
+
+warning: unused 
+variable: `seconds`
+   --> src\cron\mod.r
+s:147:22
+    |
+147 |                
+  let seconds = 
+every_ms / 1000;
+    |                
+      ^^^^^^^ help: 
+if this is 
+intentional, prefix 
+it with an 
+underscore: 
+`_seconds`
+    |
+    = note: `#[warn(u
+nused_variables)]` 
+on by default
+
+Some errors have 
+detailed 
+explanations: E0061, 
+E0308.
+For more information 
+about an error, try 
+`rustc --explain 
+E0061`.
+warning: 
+`flowbot-rs` (lib) 
+generated 2 warnings
+error: could not 
+compile `flowbot-rs` 
+(lib) due to 3 
+previous errors; 2 
+warnings emitted

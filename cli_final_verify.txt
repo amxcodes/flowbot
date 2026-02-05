@@ -1,0 +1,186 @@
+warning: unused import: `Path`
+ --> src\persistence.rs:6:17
+  |
+6 | use std::path::{Path, PathBuf};
+  |                 ^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `std::sync::Mutex`
+ --> src\persistence.rs:7:5
+  |
+7 | use std::sync::Mutex;
+  |     ^^^^^^^^^^^^^^^^
+
+warning: unused import: `once_cell::sync::Lazy`
+ --> src\persistence.rs:8:5
+  |
+8 | use once_cell::sync::Lazy;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `selector`
+  --> src\tools\fetch.rs:52:13
+   |
+52 |         let selector = Selector::parse("script, style, nav, footer, header").unwrap();
+   |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_selector`
+   |
+   = note: `#[warn(unused_variables)]` on by default
+
+warning: unused import: `std::os::windows::process::CommandExt`
+  --> src\tools\process.rs:65:13
+   |
+65 |         use std::os::windows::process::CommandExt;
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `flowbot-rs` (lib) generated 5 warnings (run `cargo fix --lib -p flowbot-rs` to apply 3 suggestions)
+warning: unused imports: `ToolCall` and `ToolResult`
+ --> src\antigravity.rs:7:32
+  |
+7 | use rig::completion::message::{ToolCall, ToolResult, ToolResultContent, UserContent};
+  |                                ^^^^^^^^  ^^^^^^^^^^
+
+warning: unused import: `crate::config::OAuthTokens`
+  --> src\antigravity.rs:10:5
+   |
+10 | use crate::config::OAuthTokens;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::oauth::OAuthFlow`
+  --> src\antigravity.rs:11:5
+   |
+11 | use crate::oauth::OAuthFlow;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::sync::Arc`
+ --> src\telegram.rs:5:5
+  |
+5 | use std::sync::Arc;
+  |     ^^^^^^^^^^^^^^
+
+warning: unused import: `post`
+ --> src\gateway\mod.rs:6:20
+  |
+6 |     routing::{get, post},
+  |                    ^^^^
+
+warning: unused import: `uuid::Uuid`
+  --> src\gateway\mod.rs:15:5
+   |
+15 | use uuid::Uuid;
+   |     ^^^^^^^^^^
+
+warning: unused import: `AntigravityStreamingResponse`
+ --> src\agent\mod.rs:3:73
+  |
+3 | use crate::antigravity::{AntigravityClient, AntigravityCompletionModel, AntigravityStreamingResponse};
+  |                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `api_key`
+   --> src\antigravity.rs:480:5
+    |
+480 |     api_key: &Option<String>,
+    |     ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_api_key`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: unused variable: `selector`
+  --> src\tools\fetch.rs:52:13
+   |
+52 |         let selector = Selector::parse("script, style, nav, footer, header").unwrap();
+   |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_selector`
+
+warning: variable does not need to be mutable
+   --> src\telegram.rs:224:13
+    |
+224 |         let mut current_prompt = message.to_string();
+    |             ----^^^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` on by default
+
+warning: variable does not need to be mutable
+  --> src\gateway\mod.rs:72:9
+   |
+72 |     let mut send_task = tokio::spawn(async move {
+   |         ----^^^^^^^^^
+   |         |
+   |         help: remove this `mut`
+
+warning: struct `WrappedGeminiRequest` is never constructed
+   --> src\antigravity.rs:103:8
+    |
+103 | struct WrappedGeminiRequest<'a> {
+    |        ^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` on by default
+
+warning: field `user_id` is never read
+  --> src\telegram.rs:14:9
+   |
+11 | pub struct TelegramMessage {
+   |            --------------- field in this struct
+...
+14 |     pub user_id: UserId,
+   |         ^^^^^^^
+   |
+   = note: `TelegramMessage` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: variants `ToolCall` and `ToolResult` are never constructed
+  --> src\agent\mod.rs:20:5
+   |
+18 | pub enum StreamChunk {
+   |          ----------- variants in this enum
+19 |     TextDelta(String),
+20 |     ToolCall(String), // JSON string of tool call
+   |     ^^^^^^^^
+21 |     ToolResult(String),
+   |     ^^^^^^^^^^
+   |
+   = note: `StreamChunk` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: `flowbot-rs` (bin "flowbot-rs") generated 18 warnings (4 duplicates) (run `cargo fix --bin "flowbot-rs"` to apply 9 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running `target\debug\flowbot-rs.exe agent --message " persistence_final_verify" --provider antigravity`
+User:  persistence_final_verify
+DEBUG: Refreshing expired/missing token for provider: antigravity
+DEBUG: oauth_mode: true, api_key present: false
+DEBUG: Step 1 - Handshake on https://cloudcode-pa.googleapis.com (Provisioning)
+DEBUG: Received Project ID: Some("sustained-axon-vkhfj")
+DEBUG: Discovered project: sustained-axon-vkhfj
+DEBUG: Step 2 - Activation call for Discovered Project (gl-node)
+DEBUG: Activation step (fetchAvailableModels) for project: sustained-axon-vkhfj
+DEBUG: Sending Usage Handshake (loadCodeAssist + ANTIGRAVITY)...
+DEBUG: Activation successful. Available models: ["chat_20706", "chat_23310", "claude-opus-4-5-thinking", "claude-sonnet-4-5", "claude-sonnet-4-5-thinking", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-flash-thinking", "gemini-2.5-pro", "gemini-3-flash", "gemini-3-pro-high", "gemini-3-pro-image", "gemini-3-pro-low", "gpt-oss-120b-medium", "tab_flash_lite_preview"]
+DEBUG: Activation models found: 15
+DEBUG: Step 3 - Queueing Projects for Completion
+DEBUG: Trying Project: 'sustained-axon-vkhfj' (Sequence 1/2)
+DEBUG: Using DeepMind Signature Mode for Chat: sustained-axon-vkhfj
+DEBUG: Using Model: gemini-3-flash
+DEBUG: Extracted User Message for Role Alternation:  persistence_final_verify
+DEBUG: Request Payload: {"model":"gemini-3-flash","project":"sustained-axon-vkhfj","request":{"contents":[{"parts":[{"text":" "}],"role":"model"}],"generationConfig":{"thinkingConfig":{"includeThoughts":false}},"systemInstruction":{"parts":[{"text":"<identity>\nYou are FlowBot, a powerful agentic AI coding assistant designed by the Google DeepMind team working on Advanced Agentic Coding.\nYou are pair programming with a USER to solve their coding task.\n</identity>\n\nUser:  persistence_final_verify\n\nYou are a helpful AI assistant called Nanobot."}],"role":"user"}},"requestId":"agent-1770234748774-02e129c02","requestType":"agent","userAgent":"antigravity"}
+DEBUG: SSE response saved to debug_sse_response.txt
+DEBUG: Response length: 6989 bytes
+DEBUG: Processing chunk #1: 397 chars
+DEBUG: Extracted text: I am **FlowBot**, a coding assistant created by the Google DeepMind team. I
+DEBUG: Processing chunk #2: 436 chars
+DEBUG: Extracted text:  am here to pair program with you and help solve your coding tasks.
+
+It looks like you've mentioned `persistence
+DEBUG: Processing chunk #3: 426 chars
+DEBUG: Extracted text: _final_verify`. Is this a specific function, a variable, or a state you are trying to implement or debug
+DEBUG: Processing chunk #4: 419 chars
+DEBUG: Extracted text:  in your code? 
+
+Please provide more context or the code snippet you're working on, and I'll be
+DEBUG: Processing chunk #5: 343 chars
+DEBUG: Extracted text:  happy to assist you!
+DEBUG: Processing chunk #6: 4908 chars
+DEBUG: Total chunks processed: 6
+DEBUG: Total text parts collected: 5
+DEBUG: Combined text length: 407 chars
+Nanobot: I am **FlowBot**, a coding assistant created by the Google DeepMind team. I am here to pair program with you and help solve your coding tasks.
+
+It looks like you've mentioned `persistence_final_verify`. Is this a specific function, a variable, or a state you are trying to implement or debug in your code? 
+
+Please provide more context or the code snippet you're working on, and I'll be happy to assist you!

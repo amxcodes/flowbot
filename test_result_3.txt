@@ -1,0 +1,81 @@
+   Compiling flowbot-rs v0.1.0 (C:\Users\AMAN ANU\Desktop\amxcodes\nanobot\nanobot-rs-clean)
+warning: unused import: `Path`
+ --> src\persistence.rs:6:17
+  |
+6 | use std::path::{Path, PathBuf};
+  |                 ^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `std::sync::Mutex`
+ --> src\persistence.rs:7:5
+  |
+7 | use std::sync::Mutex;
+  |     ^^^^^^^^^^^^^^^^
+
+warning: unused import: `once_cell::sync::Lazy`
+ --> src\persistence.rs:8:5
+  |
+8 | use once_cell::sync::Lazy;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `selector`
+  --> src\tools\fetch.rs:39:13
+   |
+39 |         let selector = Selector::parse("script, style, nav, footer, header").unwrap();
+   |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_selector`
+   |
+   = note: `#[warn(unused_variables)]` on by default
+
+warning: unused import: `std::os::windows::process::CommandExt`
+  --> src\tools\process.rs:59:13
+   |
+59 |         use std::os::windows::process::CommandExt;
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `flowbot-rs` (lib) generated 5 warnings (run `cargo fix --lib -p flowbot-rs` to apply 3 suggestions)
+warning: unused import: `flowbot_rs::tools::definitions::get_tool_declarations`
+ --> examples\test_features.rs:1:5
+  |
+1 | use flowbot_rs::tools::definitions::get_tool_declarations;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: `flowbot-rs` (example "test_features") generated 1 warning (run `cargo fix --example "test_features"` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.45s
+     Running `target\debug\examples\test_features.exe`
+🧪 Starting End-to-End Feature Test...
+
+--- Testing Persistence ---
+✅ Saved & Loaded 2 messages.
+✅ Persistence verified.
+
+--- Testing Web Fetch ---
+✅ Fetch successful (length: 127 bytes)
+✅ Content verified.
+
+--- Testing Spawn Process ---
+Spawn Result: Started process 'ping' with PID: 5fb9148c-b711-4230-bc6a-b36ed5f16c1a
+✅ PID Extracted: 5fb9148c-b711-4230-bc6a-b36ed5f16c1a
+--- Output 1 ---
+Status: Running
+Output:
+
+Pinging 127.0.0.1 with 32 bytes of data:
+Reply from 127.0.0.1: bytes=32 time<1ms TTL=128
+
+--- Output 2 ---
+Status: Running
+Output:
+Reply from 127.0.0.1: bytes=32 time<1ms TTL=128
+Reply from 127.0.0.1: bytes=32 time<1ms TTL=128
+
+--- Process List ---
+PID: 5fb9148c-b711-4230-bc6a-b36ed5f16c1a | Command: ping | Status: Running
+
+✅ Process killed.
+--- Final Process List ---
+No background processes running.
+
+✅ All Tests Completed Successfully!

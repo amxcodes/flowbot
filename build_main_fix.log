@@ -1,0 +1,439 @@
+﻿cargo : warning: 
+unused imports: 
+`ToolCall` and 
+`ToolResult`
+At line:1 char:1
++ cargo check 2>&1 | 
+Out-File -Encoding 
+utf8 
+build_main_fix.log
++ ~~~~~~~~~~~~~~~~
+    + CategoryInfo   
+           : NotSpe  
+  cified: (warning   
+ : unused...nd `T    
+oolResult`:Strin    
+g) [], RemoteExc    
+eption
+    + FullyQualified 
+   ErrorId : Native  
+  CommandError
+ 
+ --> src\antigravity.
+rs:7:32
+  |
+7 | use rig::completi
+on::message::{ToolCal
+l, ToolResult, 
+ToolResultContent, 
+UserContent};
+  |                  
+              
+^^^^^^^^  ^^^^^^^^^^
+  |
+  = note: `#[warn(unu
+sed_imports)]` on by 
+default
+
+warning: unused 
+import: `crate::confi
+g::OAuthTokens`
+  --> src\antigravity
+.rs:10:5
+   |
+10 | use crate::confi
+g::OAuthTokens;
+   |     ^^^^^^^^^^^^
+^^^^^^^^^^^^^^
+
+warning: unused 
+import: `crate::oauth
+::OAuthFlow`
+  --> src\antigravity
+.rs:11:5
+   |
+11 | use crate::oauth
+::OAuthFlow;
+   |     ^^^^^^^^^^^^
+^^^^^^^^^^^
+
+warning: unused 
+imports: `Antigravity
+CompletionModel` and 
+`AntigravityStreaming
+Response`
+ --> 
+src\agent\mod.rs:3:45
+  |
+3 | use crate::antigr
+avity::{AntigravityCl
+ient, AntigravityComp
+letionModel, Antigrav
+ityStreamingResponse}
+;
+  |                  
+                     
+      ^^^^^^^^^^^^^^^
+^^^^^^^^^^^  ^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^
+
+warning: unused 
+imports: 
+`AssistantContent`, 
+`ToolCall`, 
+`ToolFunction`, 
+`ToolResultContent`, 
+and `ToolResult`
+ --> 
+src\agent\mod.rs:6:45
+  |
+6 | use rig::completi
+on::message::{UserCon
+tent, 
+AssistantContent, 
+ToolCall, 
+ToolResult, 
+ToolResultContent, 
+Text, ToolFunction};
+  |                  
+                     
+      
+^^^^^^^^^^^^^^^^  
+^^^^^^^^  ^^^^^^^^^^ 
+ ^^^^^^^^^^^^^^^^^   
+     ^^^^^^^^^^^^
+
+warning: unused 
+import: `crate::tools
+::executor::execute_t
+ool`
+  --> 
+src\agent\mod.rs:11:5
+   |
+11 | use crate::tools
+::executor::execute_t
+ool;
+   |     ^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^
+^^^
+
+warning: unused 
+import: `uuid::Uuid`
+  --> 
+src\agent\mod.rs:13:5
+   |
+13 | use uuid::Uuid;
+   |     ^^^^^^^^^^
+
+warning: unused 
+imports: 
+`Deserialize` and 
+`Serialize`
+  --> src\agent\mod.r
+s:14:13
+   |
+14 | use 
+serde::{Deserialize, 
+Serialize};
+   |             
+^^^^^^^^^^^  
+^^^^^^^^^
+
+warning: unused 
+import: 
+`std::path::Path`
+ --> src\setup\templa
+tes.rs:1:5
+  |
+1 | use 
+std::path::Path;
+  |     
+^^^^^^^^^^^^^^^
+
+warning: unused 
+import: `Child`
+ --> src\tools\proces
+s.rs:4:31
+  |
+4 | use tokio::proces
+s::{Command, Child};
+  |                  
+             ^^^^^
+
+warning: unused 
+import: `SessionType`
+ --> src\tools\sessio
+ns.rs:4:66
+  |
+4 | use crate::gatewa
+y::agent_manager::{Ag
+entManager, 
+CleanupPolicy, 
+SessionType};
+  |                  
+                     
+                     
+      ^^^^^^^^^^^
+
+warning: unused 
+import: `Path`
+ --> src\persistence.
+rs:6:17
+  |
+6 | use 
+std::path::{Path, 
+PathBuf};
+  |                 
+^^^^
+
+warning: unused 
+import: 
+`std::sync::Mutex`
+ --> src\persistence.
+rs:7:5
+  |
+7 | use 
+std::sync::Mutex;
+  |     
+^^^^^^^^^^^^^^^^
+
+warning: unused 
+import: `once_cell::s
+ync::Lazy`
+ --> src\persistence.
+rs:8:5
+  |
+8 | use once_cell::sy
+nc::Lazy;
+  |     
+^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused 
+import: `post`
+ --> src\gateway\mod.
+rs:7:20
+  |
+7 |     
+routing::{get, post},
+  |                  
+  ^^^^
+
+warning: unused 
+import: `uuid::Uuid`
+  --> src\gateway\mod
+.rs:16:5
+   |
+16 | use uuid::Uuid;
+   |     ^^^^^^^^^^
+
+warning: unused 
+import: 
+`std::sync::Arc`
+ --> 
+src\telegram.rs:5:5
+  |
+5 | use 
+std::sync::Arc;
+  |     
+^^^^^^^^^^^^^^
+
+warning: unused 
+import: `colored::*`
+ --> 
+src\doctor.rs:4:5
+  |
+4 | use colored::*; 
+// We'll add this 
+for nice output, or 
+use direct ANSI 
+codes if keeping 
+deps minimal
+  |     ^^^^^^^^^^
+
+warning: unused 
+import: 
+`anyhow::Result`
+ --> 
+src\sessions.rs:2:5
+  |
+2 | use 
+anyhow::Result;
+  |     
+^^^^^^^^^^^^^^
+
+warning: unused 
+variable: `api_key`
+   --> src\antigravit
+y.rs:480:5
+    |
+480 |     api_key: 
+&Option<String>,
+    |     ^^^^^^^ 
+help: if this is 
+intentional, prefix 
+it with an 
+underscore: 
+`_api_key`
+    |
+    = note: `#[warn(u
+nused_variables)]` 
+on by default
+
+warning: unused 
+variable: 
+`noise_selector`
+  --> src\tools\fetch
+.rs:51:13
+   |
+51 |         let 
+noise_selector = Sele
+ctor::parse("script, 
+style, nav, footer, 
+iframe, svg, 
+noscript").unwrap();
+   |             
+^^^^^^^^^^^^^^ help: 
+if this is 
+intentional, prefix 
+it with an 
+underscore: 
+`_noise_selector`
+
+warning: unused 
+variable: `label`
+   --> src\gateway\ag
+ent_manager.rs:112:9
+    |
+112 |         label: 
+Option<String>,
+    |         ^^^^^ 
+help: if this is 
+intentional, prefix 
+it with an 
+underscore: `_label`
+
+warning: variable 
+does not need to be 
+mutable
+  --> src\gateway\mod
+.rs:73:9
+   |
+73 |     let mut 
+send_task = 
+tokio::spawn(async 
+move {
+   |         
+----^^^^^^^^^
+   |         |
+   |         help: 
+remove this `mut`
+   |
+   = note: `#[warn(un
+used_mut)]` on by 
+default
+
+warning: variable 
+does not need to be 
+mutable
+   --> src\telegram.r
+s:224:13
+    |
+224 |         let 
+mut current_prompt = 
+message.to_string();
+    |             
+----^^^^^^^^^^^^^^
+    |             |
+    |             
+help: remove this 
+`mut`
+
+warning: struct `Wrap
+pedGeminiRequest` is 
+never constructed
+   --> src\antigravit
+y.rs:103:8
+    |
+103 | struct WrappedG
+eminiRequest<'a> {
+    |        
+^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: 
+`#[warn(dead_code)]` 
+on by default
+
+warning: fields 
+`cron_scheduler` and 
+`agent_manager` are 
+never read
+  --> 
+src\agent\mod.rs:91:5
+   |
+88 | pub struct 
+AgentLoop {
+   |            
+--------- fields in 
+this struct
+...
+91 |     
+cron_scheduler: crate
+::cron::CronScheduler
+,
+   |     
+^^^^^^^^^^^^^^
+92 |     
+agent_manager: std::s
+ync::Arc<crate::gatew
+ay::agent_manager::Ag
+entManager>,
+   |     
+^^^^^^^^^^^^^
+
+warning: 
+`flowbot-rs` (lib) 
+generated 26 
+warnings (run `cargo 
+fix --lib -p 
+flowbot-rs` to apply 
+21 suggestions)
+warning: unused 
+imports: `agent`, 
+`persistence`, 
+`setup`, and 
+`token_manager`
+  --> 
+src\main.rs:13:38
+   |
+13 | use 
+flowbot_rs::{config, 
+oauth, tui, setup, 
+doctor, tools, 
+persistence, 
+antigravity, 
+telegram, gateway, 
+agent, 
+token_manager};
+   |                 
+                     
+^^^^^                
+ ^^^^^^^^^^^         
+                     
+    ^^^^^  
+^^^^^^^^^^^^^
+   |
+   = note: `#[warn(un
+used_imports)]` on 
+by default
+
+warning: 
+`flowbot-rs` (bin 
+"flowbot") generated 
+1 warning (run 
+`cargo fix --bin 
+"flowbot"` to apply 
+1 suggestion)
+    Finished `dev` 
+profile [unoptimized 
++ debuginfo] 
+target(s) in 0.50s

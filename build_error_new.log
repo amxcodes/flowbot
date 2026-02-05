@@ -1,0 +1,63 @@
+    Checking flowbot-rs v0.1.0 (C:\Users\AMAN ANU\Desktop\amxcodes\nanobot\nanobot-rs-clean)
+warning: unused import: `crate::config::Config`
+  --> src\cron\isolated_agent.rs:97:9
+   |
+97 |     use crate::config::Config;
+   |         ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `Context`
+ --> src\memory\watcher.rs:1:22
+  |
+1 | use anyhow::{Result, Context};
+  |                      ^^^^^^^
+
+warning: unused import: `std::time::Duration`
+ --> src\memory\watcher.rs:5:5
+  |
+5 | use std::time::Duration;
+  |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `model_override`
+  --> src\cron\isolated_agent.rs:94:5
+   |
+94 |     model_override: Option<String>,
+   |     ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_model_override`
+   |
+   = note: `#[warn(unused_variables)]` on by default
+
+error[E0382]: use of moved value: `id`
+   --> src\memory\vector_store.rs:170:13
+    |
+135 |         let id = uuid::Uuid::new_v4().to_string();
+    |             -- move occurs because `id` has type `std::string::String`, which does not implement the `Copy` trait
+...
+147 |         tokio::task::spawn_blocking(move || {
+    |                                     ------- value moved into closure here
+...
+155 |                 params![id, path_clone, content_clone, metadata_json, vector_blob, now, now],
+    |                         -- variable moved due to use in closure
+...
+170 |             id,
+    |             ^^ value used here after move
+    |
+help: consider cloning the value before moving it into the closure
+    |
+147 ~         let value = id.clone();
+148 ~         tokio::task::spawn_blocking(move || {
+149 |             let mut conn = conn.lock().unwrap();
+...
+155 |                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+156 ~                 params![value, path_clone, content_clone, metadata_json, vector_blob, now, now],
+    |
+
+warning: unused variable: `root`
+  --> src\memory\watcher.rs:93:28
+   |
+93 | fn is_ignored(path: &Path, root: &Path) -> bool {
+   |                            ^^^^ help: if this is intentional, prefix it with an underscore: `_root`
+
+For more information about this error, try `rustc --explain E0382`.
+warning: `flowbot-rs` (lib) generated 5 warnings
+error: could not compile `flowbot-rs` (lib) due to 1 previous error; 5 warnings emitted

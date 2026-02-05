@@ -1,0 +1,77 @@
+﻿cargo :     Finished `dev` profile 
+[unoptimized + debuginfo] target(s) 
+in 0.28s
+At line:1 char:1
++ cargo run -- agent --message "test" 
+--provider antigravity 2>&1 | Out ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpec 
+   ified: (    Finished `d...get(s)   
+  in 0.28s:String) [], RemoteExcept   
+ ion
+    + FullyQualifiedErrorId : NativeC 
+   ommandError
+ 
+     Running 
+`target\debug\nanobot-rs.exe agent 
+--message test --provider antigravity`
+User: test
+DEBUG: auth_token present: true, 
+api_key present: false
+DEBUG: token starts with: 
+ya29.a0AUMWg_KWovN6h...
+Error: CompletionError: 
+ProviderError: API request failed 
+with status 400 Bad Request: {
+  "error": {
+    "code": 400,
+    "message": "Invalid JSON payload 
+received. Unknown name \"contents\": 
+Cannot find field.\nInvalid JSON 
+payload received. Unknown name 
+\"system_instruction\": Cannot find 
+field.\nInvalid JSON payload 
+received. Unknown name 
+\"generation_config\": Cannot find 
+field.",
+    "status": "INVALID_ARGUMENT",
+    "details": [
+      {
+        "@type": "type.googleapis.com/
+google.rpc.BadRequest",
+        "fieldViolations": [
+          {
+            "description": "Invalid 
+JSON payload received. Unknown name 
+\"contents\": Cannot find field."
+          },
+          {
+            "description": "Invalid 
+JSON payload received. Unknown name 
+\"system_instruction\": Cannot find 
+field."
+          },
+          {
+            "description": "Invalid 
+JSON payload received. Unknown name 
+\"generation_config\": Cannot find 
+field."
+          }
+        ]
+      }
+    ]
+  }
+}
+ (attempted: https://daily-cloudcode-p
+a.sandbox.googleapis.com/v1internal:ge
+nerateContent, https://autopush-cloudc
+ode-pa.sandbox.googleapis.com/v1intern
+al:generateContent, https://cloudcode-
+pa.googleapis.com/v1internal:generateC
+ontent)
+error: process didn't exit 
+successfully: 
+`target\debug\nanobot-rs.exe agent 
+--message test --provider 
+antigravity` (exit code: 1)

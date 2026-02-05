@@ -1,0 +1,448 @@
+﻿cargo :     Checking 
+flowbot-rs v0.1.0 
+(C:\Users\AMAN ANU\De
+sktop\amxcodes\nanobo
+t\nanobot-rs-clean)
+At line:1 char:1
++ cargo check 2>&1 | 
+Out-File -FilePath 
+cron_build.log 
+-Encoding utf8
++ ~~~~~~~~~~~~~~~~
+    + CategoryInfo   
+           : NotSpe  
+  cified: (    Che   
+ cking fl...nobot    
+-rs-clean):Strin    
+g) [], RemoteExc    
+eption
+    + FullyQualified 
+   ErrorId : Native  
+  CommandError
+ 
+error[E0433]: failed 
+to resolve: use of 
+undeclared type 
+`AssistantContent`
+   --> src\agent\mod.
+rs:268:46
+    |
+268 |                
+      content: OneOrM
+any::one(AssistantCon
+tent::Text(Text{text:
+ current_text.clone()
+}))
+    |                
+                     
+         
+^^^^^^^^^^^^^^^^ use 
+of undeclared type 
+`AssistantContent`
+    |
+help: consider 
+importing one of 
+these items
+    |
+  1 + use crate::agen
+t::openai::AssistantC
+ontent;
+    |
+  1 + use crate::agen
+t::openai::responses_
+api::AssistantContent
+;
+    |
+  1 + use rig::messag
+e::AssistantContent;
+    |
+  1 + use rig::provid
+ers::cohere::completi
+on::AssistantContent;
+    |
+    = and 5 other 
+candidates
+
+warning: unused 
+import: 
+`console::style`
+ --> src\doctor\teleg
+ram.rs:5:5
+  |
+5 | use 
+console::style;
+  |     
+^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unu
+sed_imports)]` on by 
+default
+
+error[E0308]: 
+mismatched types
+    --> src\agent\mod
+.rs:281:74
+     |
+ 281 |               
+  let args_value: 
+serde_json::Value = s
+erde_json::from_str(&
+tool_call.function.ar
+guments)
+     |               
+                     
+                 
+-------------------- 
+^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^ expected 
+`&str`, found 
+`&Value`
+     |               
+                     
+                 |
+     |               
+                     
+                 
+arguments to this 
+function are 
+incorrect
+     |
+     = note: 
+expected reference 
+`&str`
+                
+found reference 
+`&serde_json::Value`
+note: function 
+defined here
+    --> 
+C:\Users\AMAN ANU\.ca
+rgo\registry\src\inde
+x.crates.io-1949cf8c6
+b5b557f\serde_json-1.
+0.149\src\de.rs:2699:
+8
+     |
+2699 | pub fn 
+from_str<'a, T>(s: 
+&'a str) -> Result<T>
+     |        
+^^^^^^^^
+
+error[E0061]: this 
+function takes 3 
+arguments but 2 
+arguments were 
+supplied
+   --> src\agent\mod.
+rs:293:25
+    |
+293 |                
+         crate::tools
+::executor::execute_t
+ool(&tool_call.functi
+on.name, 
+args_value).await
+    |                
+         ^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^
+^^^------------------
+-------------------- 
+argument #3 of type `
+std::option::Option<&
+AgentManager>` is 
+missing
+    |
+note: expected `Optio
+n<&CronScheduler>`, 
+found `Value`
+   --> src\agent\mod.
+rs:293:88
+    |
+293 |                
+         crate::tools
+::executor::execute_t
+ool(&tool_call.functi
+on.name, 
+args_value).await
+    |                
+                     
+                     
+                     
+         ^^^^^^^^^^
+    = note: expected 
+enum `std::option::Op
+tion<&CronScheduler>`
+               found 
+enum 
+`serde_json::Value`
+note: function 
+defined here
+   --> src\tools\exec
+utor.rs:61:14
+    |
+ 61 | pub async fn 
+execute_tool(
+    |              
+^^^^^^^^^^^^
+ 62 |     
+tool_input: &str,
+ 63 |     
+cron_scheduler: Optio
+n<&crate::cron::CronS
+cheduler>,
+    |     -----------
+---------------------
+-------------------
+ 64 |     
+agent_manager: Option
+<&crate::gateway::age
+nt_manager::AgentMana
+ger>,
+    |     -----------
+---------------------
+---------------------
+--------------
+help: provide the 
+argument
+    |
+293 -                
+         crate::tools
+::executor::execute_t
+ool(&tool_call.functi
+on.name, 
+args_value).await
+293 +                
+         crate::tools
+::executor::execute_t
+ool(&tool_call.functi
+on.name, /* std::opti
+on::Option<&CronSched
+uler> */, /* std::opt
+ion::Option<&AgentMan
+ager> */).await
+    |
+
+error[E0308]: 
+`match` arms have 
+incompatible types
+   --> src\agent\mod.
+rs:293:25
+    |
+284 |                
+   let result_str = 
+match tool_call.funct
+ion.name.as_str() {
+    |                
+                    -
+---------------------
+---------------- 
+`match` arms have 
+incompatible types
+285 |                
+       "cron" => {
+286 | /              
+           match crat
+e::tools::cron::execu
+te_cron_tool(&self.cr
+on_scheduler, 
+&args_value).await {
+287 | |              
+               
+Ok(res) => res,
+288 | |              
+               
+Err(e) => 
+format!("Error: {}", 
+e),
+289 | |              
+           }
+    | |______________
+___________- this is 
+found to be of type 
+`std::string::String`
+...
+293 |                
+           crate::too
+ls::executor::execute
+_tool(&tool_call.func
+tion.name, 
+args_value).await
+    |                
+           ^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^ expected 
+`String`, found 
+`Result<String, 
+Error>`
+    |
+    = note: expected 
+struct 
+`std::string::String`
+                 
+found enum `Result<st
+d::string::String, 
+anyhow::Error>`
+help: consider using 
+`Result::expect` to 
+unwrap the `Result<st
+d::string::String, 
+anyhow::Error>` 
+value, panicking if 
+the value is a 
+`Result::Err`
+    |
+294 |                
+     
+}.expect("REASON")
+    |                
+      
++++++++++++++++++
+
+error[E0599]: no 
+function or 
+associated item 
+named 
+`new_async_repeated` 
+found for struct 
+`Job` in the current 
+scope
+   --> src\cron\mod.r
+s:151:39
+    |
+151 |                
+  let tokio_job = Job
+::new_async_repeated(
+    |                
+                     
+  ^^^^^^^^^^^^^^^^^^ 
+function or 
+associated item not 
+found in `Job`
+    |
+note: if you're 
+trying to build a 
+new `Job` consider 
+using one of the 
+following associated 
+functions:
+      Job::new
+      Job::new_tz
+      Job::new_async
+      
+Job::new_async_tz
+      and 9 others
+   --> C:\Users\AMAN 
+ANU\.cargo\registry\s
+rc\index.crates.io-19
+49cf8c6b5b557f\tokio-
+cron-scheduler-0.13.0
+\src\job\mod.rs:99:5
+    |
+ 99 | /     pub fn 
+new<S, T>(schedule: 
+S, run: T) -> 
+Result<Self, 
+JobSchedulerError>
+100 | |     where
+101 | |         T: 
+'static,
+102 | |         T: 
+FnMut(Uuid, 
+JobsSchedulerLocked) 
++ Send + Sync,
+103 | |         S: 
+ToString,
+    | |______________
+______^
+...
+120 | /     pub fn 
+new_tz<S, T, 
+TZ>(schedule: S, 
+timezone: TZ, run: 
+T) -> Result<Self, 
+JobSchedulerError>
+121 | |     where
+122 | |         T: 
+'static,
+123 | |         T: 
+FnMut(Uuid, 
+JobsSchedulerLocked) 
++ Send + Sync,
+124 | |         S: 
+ToString,
+125 | |         TZ: 
+TimeZone,
+    | |______________
+_______^
+...
+183 | /     pub fn 
+new_async<S, 
+T>(schedule: S, run: 
+T) -> Result<Self, 
+JobSchedulerError>
+184 | |     where
+185 | |         T: 
+'static,
+186 | |         T: 
+FnMut(Uuid, 
+JobsSchedulerLocked) 
+-> Pin<Box<dyn 
+Future<Output = ()> 
++ Send>>
+187 | |             
++ Send
+188 | |             
++ Sync,
+189 | |         S: 
+ToString,
+    | |______________
+______^
+...
+206 | /     pub fn 
+new_async_tz<S, T, 
+TZ>(
+207 | |         
+schedule: S,
+208 | |         
+timezone: TZ,
+209 | |         run: 
+T,
+...   |
+216 | |         S: 
+ToString,
+217 | |         TZ: 
+TimeZone,
+    | |______________
+_______^
+help: there is an 
+associated function 
+`new_repeated` with 
+a similar name
+    |
+151 -                
+  let tokio_job = Job
+::new_async_repeated(
+151 +                
+  let tokio_job = 
+Job::new_repeated(
+    |
+
+Some errors have 
+detailed 
+explanations: E0061, 
+E0308, E0433, E0599.
+For more information 
+about an error, try 
+`rustc --explain 
+E0061`.
+warning: 
+`flowbot-rs` (lib) 
+generated 1 warning
+error: could not 
+compile `flowbot-rs` 
+(lib) due to 5 
+previous errors; 1 
+warning emitted

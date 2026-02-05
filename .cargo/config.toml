@@ -1,0 +1,11 @@
+# Windows build configuration
+# Disable incremental compilation to avoid file locking issues
+
+[build]
+incremental = false
+
+[profile.dev]
+incremental = false
+
+[profile.release]
+incremental = false

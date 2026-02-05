@@ -1,0 +1,78 @@
+﻿cargo :     Checking 
+flowbot-rs v0.1.0 
+(C:\Users\AMAN ANU\De
+sktop\amxcodes\nanobo
+t\nanobot-rs-clean)
+At line:1 char:1
++ cargo check 2>&1 | 
+Out-File -FilePath 
+wizard_build.log 
+-Encoding utf8
++ ~~~~~~~~~~~~~~~~
+    + CategoryInfo   
+           : NotSpe  
+  cified: (    Che   
+ cking fl...nobot    
+-rs-clean):Strin    
+g) [], RemoteExc    
+eption
+    + FullyQualified 
+   ErrorId : Native  
+  CommandError
+ 
+error[E0382]: borrow 
+of moved value: 
+`channels`
+   --> src\setup\wiza
+rd.rs:133:8
+    |
+ 86 |     let 
+channels: 
+Vec<String> = 
+channel_indices
+    |         
+-------- move occurs 
+because `channels` 
+has type `Vec<std::st
+ring::String>`, 
+which does not 
+implement the `Copy` 
+trait
+...
+127 |         
+channels,
+    |         
+-------- value moved 
+here
+...
+133 |     if channels
+.contains(&"Telegram"
+.to_string()) {
+    |        
+^^^^^^^^ value 
+borrowed here after 
+move
+    |
+    = note: borrow 
+occurs due to deref 
+coercion to `[std::st
+ring::String]`
+help: consider 
+cloning the value if 
+the performance cost 
+is acceptable
+    |
+127 |         
+channels: 
+channels.clone(),
+    |                
+ ++++++++++++++++++
+
+For more information 
+about this error, 
+try `rustc --explain 
+E0382`.
+error: could not 
+compile `flowbot-rs` 
+(lib) due to 1 
+previous error

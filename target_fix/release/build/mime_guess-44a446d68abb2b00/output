@@ -1,0 +1,1 @@
+cargo:rustc-env=MIME_TYPES_GENERATED_PATH=C:\Users\AMAN ANU\Desktop\amxcodes\nanobot\nanobot-rs-clean\target_fix\release\build\mime_guess-44a446d68abb2b00\out\mime_types_generated.rs

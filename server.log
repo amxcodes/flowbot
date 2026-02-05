@@ -1,0 +1,140 @@
+   Compiling flowbot-rs v0.1.0 (C:\Users\AMAN ANU\Desktop\amxcodes\nanobot\nanobot-rs-clean)
+warning: unused import: `std::sync::Arc`
+ --> src\telegram.rs:5:5
+  |
+5 | use std::sync::Arc;
+  |     ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `post`
+ --> src\gateway\mod.rs:6:20
+  |
+6 |     routing::{get, post},
+  |                    ^^^^
+
+warning: unused import: `uuid::Uuid`
+  --> src\gateway\mod.rs:15:5
+   |
+15 | use uuid::Uuid;
+   |     ^^^^^^^^^^
+
+warning: unused import: `AntigravityStreamingResponse`
+ --> src\agent\mod.rs:3:73
+  |
+3 | use crate::antigravity::{AntigravityClient, AntigravityCompletionModel, AntigravityStreamingResponse};
+  |                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `AssistantContent`
+ --> src\agent\mod.rs:4:68
+  |
+4 | use rig::completion::{CompletionModel, CompletionRequest, Message, AssistantContent};
+  |                                                                    ^^^^^^^^^^^^^^^^
+
+warning: unused import: `serde_json::json`
+ --> src\agent\mod.rs:8:5
+  |
+8 | use serde_json::json;
+  |     ^^^^^^^^^^^^^^^^
+
+warning: unused variable: `api_key`
+   --> src\antigravity.rs:441:5
+    |
+441 |     api_key: &Option<String>,
+    |     ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_api_key`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: variable does not need to be mutable
+   --> src\telegram.rs:224:13
+    |
+224 |         let mut current_prompt = message.to_string();
+    |             ----^^^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` on by default
+
+warning: variable does not need to be mutable
+  --> src\gateway\mod.rs:72:9
+   |
+72 |     let mut send_task = tokio::spawn(async move {
+   |         ----^^^^^^^^^
+   |         |
+   |         help: remove this `mut`
+
+warning: unused variable: `resp`
+  --> src\agent\mod.rs:72:64
+   |
+72 | ...                   StreamedAssistantContent::Final(resp) => {
+   |                                                       ^^^^ help: if this is intentional, prefix it with an underscore: `_resp`
+
+warning: struct `WrappedGeminiRequest` is never constructed
+  --> src\antigravity.rs:94:8
+   |
+94 | struct WrappedGeminiRequest<'a> {
+   |        ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: field `user_id` is never read
+  --> src\telegram.rs:14:9
+   |
+11 | pub struct TelegramMessage {
+   |            --------------- field in this struct
+...
+14 |     pub user_id: UserId,
+   |         ^^^^^^^
+   |
+   = note: `TelegramMessage` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: variants `ToolCall` and `ToolResult` are never constructed
+  --> src\agent\mod.rs:14:5
+   |
+12 | pub enum StreamChunk {
+   |          ----------- variants in this enum
+13 |     TextDelta(String),
+14 |     ToolCall(String), // JSON string of tool call
+   |     ^^^^^^^^
+15 |     ToolResult(String),
+   |     ^^^^^^^^^^
+   |
+   = note: `StreamChunk` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: field `session_id` is never read
+  --> src\agent\mod.rs:21:9
+   |
+20 | pub struct AgentMessage {
+   |            ------------ field in this struct
+21 |     pub session_id: String,
+   |         ^^^^^^^^^^
+   |
+   = note: `AgentMessage` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: `flowbot-rs` (bin "flowbot-rs") generated 14 warnings (run `cargo fix --bin "flowbot-rs"` to apply 8 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.63s
+     Running `target\debug\flowbot-rs.exe server --port 3000`
+🤖 Starting Agent Loop...
+🚀 Gateway listening on 0.0.0.0:3000
+DEBUG: auth_token present: true, api_key present: false
+DEBUG: token starts with: ya29.a0AUMWg_KD8xXG0...
+New WebSocket connection: b2297d0c-ed51-4dbe-8fe2-9c2c1e4f19fc
+Received: {"message": "Read the contents of Cargo.toml"}
+DEBUG: Enabling 4 tools for streaming request
+DEBUG: Starting CloudCode Protocol Sequence...
+DEBUG: Step 1 - Discovery on https://cloudcode-pa.googleapis.com
+DEBUG: Received Project ID: Some("sustained-axon-vkhfj")
+DEBUG: Discovered Project ID: sustained-axon-vkhfj
+DEBUG: Step 2 - Activation for sustained-axon-vkhfj
+DEBUG: Activation step (fetchAvailableModels) for project: sustained-axon-vkhfj
+DEBUG: Sending Usage Handshake (loadCodeAssist + ANTIGRAVITY)...
+DEBUG: Activation successful. Available models: ["chat_20706", "chat_23310", "claude-opus-4-5-thinking", "claude-sonnet-4-5", "claude-sonnet-4-5-thinking", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-flash-thinking", "gemini-2.5-pro", "gemini-3-flash", "gemini-3-pro-high", "gemini-3-pro-image", "gemini-3-pro-low", "gpt-oss-120b-medium", "tab_flash_lite_preview"]
+DEBUG: Activation sequence complete. Models found: 15
+DEBUG: Step 3 - Queueing Projects for Completion
+DEBUG: Trying Project: 'sustained-axon-vkhfj' (Sequence 1/1)
+DEBUG: Using DeepMind Signature Mode for Chat: sustained-axon-vkhfj
+DEBUG: Using Model: gemini-3-flash
+DEBUG: Extracted User Message for Role Alternation: Read the contents of Cargo.toml
+WS receive error: IO error: An existing connection was forcibly closed by the remote host. (os error 10054)
+WebSocket disconnected: b2297d0c-ed51-4dbe-8fe2-9c2c1e4f19fc
+error: process didn't exit successfully: `target\debug\flowbot-rs.exe server --port 3000` (exit code: 1)

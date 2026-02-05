@@ -1,0 +1,145 @@
+﻿cargo :     Checking 
+flowbot-rs v0.1.0 
+(C:\Users\AMAN ANU\De
+sktop\amxcodes\nanobo
+t\nanobot-rs-clean)
+At line:1 char:1
++ cargo check 2>&1 | 
+Out-File -FilePath fi
+nal_build_check.log 
+-Encoding ...
++ ~~~~~~~~~~~~~~~~
+    + CategoryInfo   
+           : NotSpe  
+  cified: (    Che   
+ cking fl...nobot    
+-rs-clean):Strin    
+g) [], RemoteExc    
+eption
+    + FullyQualified 
+   ErrorId : Native  
+  CommandError
+ 
+warning: struct `Wrap
+pedGeminiRequest` is 
+never constructed
+   --> src\antigravit
+y.rs:101:8
+    |
+101 | struct WrappedG
+eminiRequest<'a> {
+    |        
+^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: 
+`#[warn(dead_code)]` 
+on by default
+
+warning: fields 
+`cron_scheduler` and 
+`agent_manager` are 
+never read
+  --> 
+src\agent\mod.rs:88:5
+   |
+85 | pub struct 
+AgentLoop {
+   |            
+--------- fields in 
+this struct
+...
+88 |     
+cron_scheduler: crate
+::cron::CronScheduler
+,
+   |     
+^^^^^^^^^^^^^^
+89 |     
+agent_manager: std::s
+ync::Arc<crate::gatew
+ay::agent_manager::Ag
+entManager>,
+   |     
+^^^^^^^^^^^^^
+
+warning: 
+`flowbot-rs` (lib) 
+generated 2 warnings
+error[E0603]: module 
+`db` is private
+   --> 
+src\main.rs:169:34
+    |
+169 |             flo
+wbot_rs::pairing::db:
+:init_database().awai
+t?;
+    |                
+                  ^^ 
+private module
+    |
+note: the module 
+`db` is defined here
+   --> C:\Users\AMAN 
+ANU\Desktop\amxcodes\
+nanobot\nanobot-rs-cl
+ean\src\pairing\mod.r
+s:1:1
+    |
+  1 | mod db;
+    | ^^^^^^
+help: consider 
+importing this 
+function instead
+    |
+169 -             flo
+wbot_rs::pairing::db:
+:init_database().awai
+t?;
+169 +             flo
+wbot_rs::pairing::ini
+t_database().await?;
+    |
+
+warning: unused 
+imports: `agent`, 
+`persistence`, 
+`setup`, and 
+`token_manager`
+  --> 
+src\main.rs:13:38
+   |
+13 | use 
+flowbot_rs::{config, 
+oauth, tui, setup, 
+doctor, tools, 
+persistence, 
+antigravity, 
+telegram, gateway, 
+agent, 
+token_manager};
+   |                 
+                     
+^^^^^                
+ ^^^^^^^^^^^         
+                     
+    ^^^^^  
+^^^^^^^^^^^^^
+   |
+   = note: `#[warn(un
+used_imports)]` on 
+by default
+
+For more information 
+about this error, 
+try `rustc --explain 
+E0603`.
+warning: 
+`flowbot-rs` (bin 
+"flowbot") generated 
+1 warning
+error: could not 
+compile `flowbot-rs` 
+(bin "flowbot") due 
+to 1 previous error; 
+1 warning emitted

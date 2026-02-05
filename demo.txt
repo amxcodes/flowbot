@@ -1,0 +1,11 @@
+# Tool Calling Demo
+
+This is a test file for the tool calling system.
+It contains some sample text that can be read and modified.
+
+Key features:
+- File operations
+- Web search
+- Command execution
+
+Version: 1.0

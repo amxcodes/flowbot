@@ -1,0 +1,75 @@
+﻿cargo :    Compiling 
+flowbot-rs v0.1.0 
+(C:\Users\AMAN ANU\De
+sktop\amxcodes\nanobo
+t\nanobot-rs-clean)
+At line:1 char:1
++ cargo build --lib 
+2>&1 | Out-File 
+-FilePath 
+build_error.txt 
+-Encoding ...
++ ~~~~~~~~~~~~~~~~~~~
+~~~
+    + CategoryInfo   
+           : NotSpe  
+  cified: (   Comp   
+ iling fl...nobot    
+-rs-clean):Strin    
+g) [], RemoteExc    
+eption
+    + FullyQualified 
+   ErrorId : Native  
+  CommandError
+ 
+error[E0599]: no 
+method named 
+`completion_model` 
+found for struct `rig
+::client::Client` in 
+the current scope
+   --> src\cron\isola
+ted_agent.rs:124:56
+    |
+124 |         AgentPr
+ovider::OpenAI(client
+.completions_api().co
+mpletion_model("gpt-4
+o-mini"))
+    |                
+                     
+                   
+^^^^^^^^^^^^^^^^ 
+method not found in `
+rig::client::Client<O
+penAICompletionsExt, 
+_>`
+    |
+    = help: items 
+from traits can only 
+be used if the trait 
+is in scope
+help: the following 
+traits which provide 
+`completion_model` 
+are implemented but 
+not in scope; 
+perhaps you want to 
+import one of them
+    |
+  1 + use rig::client
+::CompletionClient;
+    |
+  1 + use rig::client
+::completion::Complet
+ionClientDyn;
+    |
+
+For more information 
+about this error, 
+try `rustc --explain 
+E0599`.
+error: could not 
+compile `flowbot-rs` 
+(lib) due to 1 
+previous error

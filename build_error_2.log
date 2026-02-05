@@ -1,0 +1,94 @@
+    Checking flowbot-rs v0.1.0 (C:\Users\AMAN ANU\Desktop\amxcodes\nanobot\nanobot-rs-clean)
+warning: unused import: `std::sync::Arc`
+ --> src\telegram.rs:5:5
+  |
+5 | use std::sync::Arc;
+  |     ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `post`
+ --> src\gateway\mod.rs:6:20
+  |
+6 |     routing::{get, post},
+  |                    ^^^^
+
+warning: unused import: `uuid::Uuid`
+  --> src\gateway\mod.rs:15:5
+   |
+15 | use uuid::Uuid;
+   |     ^^^^^^^^^^
+
+warning: unused import: `AntigravityStreamingResponse`
+ --> src\agent\mod.rs:3:73
+  |
+3 | use crate::antigravity::{AntigravityClient, AntigravityCompletionModel, AntigravityStreamingResponse};
+  |                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `AssistantContent`
+ --> src\agent\mod.rs:4:68
+  |
+4 | use rig::completion::{CompletionModel, CompletionRequest, Message, AssistantContent};
+  |                                                                    ^^^^^^^^^^^^^^^^
+
+warning: unused import: `serde_json::json`
+ --> src\agent\mod.rs:8:5
+  |
+8 | use serde_json::json;
+  |     ^^^^^^^^^^^^^^^^
+
+error[E0063]: missing fields `function_call` and `function_response` in initializer of `antigravity::Part`
+    --> src\antigravity.rs:1279:58
+     |
+1279 | ...                   content.parts = vec![Part { text: combined_text }];
+     |                                            ^^^^ missing `function_call` and `function_response`
+
+warning: unused variable: `api_key`
+   --> src\antigravity.rs:471:5
+    |
+471 |     api_key: &Option<String>,
+    |     ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_api_key`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: variable does not need to be mutable
+   --> src\telegram.rs:224:13
+    |
+224 |         let mut current_prompt = message.to_string();
+    |             ----^^^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` on by default
+
+warning: variable does not need to be mutable
+  --> src\gateway\mod.rs:72:9
+   |
+72 |     let mut send_task = tokio::spawn(async move {
+   |         ----^^^^^^^^^
+   |         |
+   |         help: remove this `mut`
+
+warning: unused variable: `resp`
+  --> src\agent\mod.rs:72:64
+   |
+72 | ...                   StreamedAssistantContent::Final(resp) => {
+   |                                                       ^^^^ help: if this is intentional, prefix it with an underscore: `_resp`
+
+error[E0308]: mismatched types
+    --> src\antigravity.rs:1279:71
+     |
+1279 | ...                   content.parts = vec![Part { text: combined_text }];
+     |                                                         ^^^^^^^^^^^^^ expected `Option<String>`, found `String`
+     |
+     = note: expected enum `std::option::Option<std::string::String>`
+              found struct `std::string::String`
+help: try wrapping the expression in `Some`
+     |
+1279 |                                     content.parts = vec![Part { text: Some(combined_text) }];
+     |                                                                       +++++             +
+
+Some errors have detailed explanations: E0063, E0308.
+For more information about an error, try `rustc --explain E0063`.
+warning: `flowbot-rs` (bin "flowbot-rs") generated 10 warnings
+error: could not compile `flowbot-rs` (bin "flowbot-rs") due to 2 previous errors; 10 warnings emitted
