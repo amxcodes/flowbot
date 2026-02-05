@@ -12,6 +12,7 @@ pub struct WizardData {
     pub timezone: String,
     pub channels: Vec<String>,
     pub agent_emoji: String,
+    pub provider_config: Option<String>,
 }
 
 pub async fn interactive_setup(opts: SetupOptions) -> Result<()> {
@@ -74,7 +75,53 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<()> {
         .with_prompt("Your timezone (e.g., America/New_York)")
         .default("UTC".into())
         .interact()?;
+
+    // 3.5 AI Provider Selection
+    println!();
+    println!("{}", style("🤖 AI Brain Configuration").bold());
     
+    let providers = vec!["Google Gemini (Antigravity)", "OpenAI", "OpenRouter (Claude/Llama)"];
+    let provider_idx = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("Select your primary AI provider")
+        .items(&providers)
+        .default(0)
+        .interact()?;
+    
+    let provider_config = match provider_idx {
+        0 => { // Antigravity
+            println!("You selected Google Gemini. We can authenticate via OAuth (recommended) or API Key.");
+            let auth_methods = vec!["OAuth (Browser Login)", "API Key"];
+            let auth_idx = Select::with_theme(&ColorfulTheme::default())
+                .with_prompt("Authentication Method")
+                .items(&auth_methods)
+                .default(0)
+                .interact()?;
+            
+            if auth_idx == 0 {
+                Some("antigravity_oauth".to_string())
+            } else {
+                let key: String = Input::with_theme(&ColorfulTheme::default())
+                   .with_prompt("Enter your Google Gemini API Key")
+                   .interact_text()?;
+                std::env::set_var("ANTIGRAVITY_API_KEY", &key); // Temporarily set for session
+                Some(format!("antigravity_key:{}", key))
+            }
+        },
+        1 => { // OpenAI
+            let key: String = Input::with_theme(&ColorfulTheme::default())
+                .with_prompt("Enter your OpenAI API Key")
+                .interact_text()?;
+             Some(format!("openai:{}", key))
+        },
+        2 => { // OpenRouter
+            let key: String = Input::with_theme(&ColorfulTheme::default())
+                .with_prompt("Enter your OpenRouter API Key")
+                .interact_text()?;
+             Some(format!("openrouter:{}", key))
+        },
+        _ => None,
+    };
+
     // 4. Channel selection
     println!();
     let channel_options = vec!["Telegram", "WebSocket", "Discord (coming soon)"];
@@ -126,9 +173,30 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<()> {
         timezone,
         channels: channels.clone(),
         agent_emoji,
+        provider_config: provider_config.clone(),
     };
     
     workspace_mgmt::create_workspace(&workspace_dir, wizard_data).await?;
+
+    // 7. Handle Post-Setup Actions (OAuth)
+    if let Some(conf) = &provider_config {
+        if conf == "antigravity_oauth" {
+            println!();
+            println!("{}", style("🔐 Starting Google Gemini OAuth...").bold().cyan());
+            println!("Opening browser to authenticate...");
+            // We need to call the oauth module. Since we are in flowbot_rs::setup, 
+            // we can access crate::oauth if it's public or we need to import it.
+            // Assuming crate::oauth::run_login_flow exists and is accessible.
+            // Check imports in main.rs: usage is run_oauth_login -> calls flowbot_rs::oauth::...
+            
+            // We need to resolve the path relative to here.
+            // Since this is inside flowbot_rs library, we can use crate::oauth
+            match crate::oauth::run_login_flow("antigravity").await {
+                Ok(_) => println!("{}", style("✅ OAuth Login Successful!").green()),
+                Err(e) => println!("{}", style(format!("❌ OAuth Failed: {}", e)).red()),
+            }
+        }
+    }
     
     if channels.contains(&"Telegram".to_string()) {
         println!();

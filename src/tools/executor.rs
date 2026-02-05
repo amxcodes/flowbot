@@ -51,6 +51,11 @@ You have access to the following tools:
 12. **write_process_input** - Send text input to a running process (stdin)
     Usage: { "tool": "write_process_input", "pid": "...", "input": "yes\n" }
 
+
+13. **browser_open** - Open a URL in a headless browser
+    Usage: { "tool": "browser_open", "url": "https://example.com", "action": "extract_text" }
+    Actions: "extract_text" (default), "screenshot", "html"
+
 When you need to use a tool, respond with ONLY the JSON tool call on a single line.
 
 After I execute the tool and show you the result, continue the conversation normally.

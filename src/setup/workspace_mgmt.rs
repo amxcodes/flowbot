@@ -9,6 +9,7 @@ pub async fn create_workspace(workspace_dir: &Path, data: WizardData) -> Result<
     // Create directory structure
     fs::create_dir_all(workspace_dir).await?;
     fs::create_dir_all(workspace_dir.join("memory")).await?;
+    fs::create_dir_all(workspace_dir.join("skills")).await?;
     
     // Generate file contents
     let soul = templates::soul_template(data.personality);
@@ -32,6 +33,12 @@ pub async fn create_workspace(workspace_dir: &Path, data: WizardData) -> Result<
         "# Memory\n\nDaily memory logs will appear here.\n"
     ).await?;
     
+    // Create skills README
+    fs::write(
+        workspace_dir.join("skills/README.md"),
+        templates::skills_readme_template()
+    ).await?;
+    
     println!("  ✓ Created SOUL.md");
     println!("  ✓ Created IDENTITY.md");
     println!("  ✓ Created USER.md");
@@ -39,7 +46,62 @@ pub async fn create_workspace(workspace_dir: &Path, data: WizardData) -> Result<
     println!("  ✓ Created TOOLS.md");
     println!("  ✓ Created BOOTSTRAP.md");
     println!("  ✓ Created memory/ directory");
+    println!("  ✓ Created skills/ directory");
     
+    // Update config.toml
+    use crate::config::{Config, Providers, AntigravityConfig, OpenAIConfig, OpenRouterConfig, TelegramConfig};
+    
+    // Load or create default config
+    let mut config = Config::load().unwrap_or_else(|_| Config {
+        default_provider: "antigravity".to_string(),
+        providers: Providers {
+            openrouter: None,
+            antigravity: None,
+            openai: None,
+            telegram: None,
+        },
+    });
+
+    // Parse provider config from wizard
+    if let Some(conf_str) = data.provider_config {
+        if conf_str == "antigravity_oauth" {
+            config.default_provider = "antigravity".to_string();
+            // OAuth token is handled separately via run_login_flow
+            // But we should ensure the config entry exists
+            if config.providers.antigravity.is_none() {
+                 config.providers.antigravity = Some(AntigravityConfig {
+                     api_key: "".to_string(), // OAuth doesn't use API key here usually, or uses token
+                     base_url: None,
+                     fallback_base_urls: None,
+                 });
+            }
+        } else if let Some(key) = conf_str.strip_prefix("antigravity_key:") {
+            config.default_provider = "antigravity".to_string();
+            config.providers.antigravity = Some(AntigravityConfig {
+                api_key: key.to_string(),
+                base_url: None,
+                fallback_base_urls: None,
+            });
+        } else if let Some(key) = conf_str.strip_prefix("openai:") {
+            config.default_provider = "openai".to_string();
+            config.providers.openai = Some(OpenAIConfig {
+                api_key: key.to_string(),
+            });
+        } else if let Some(key) = conf_str.strip_prefix("openrouter:") {
+            config.default_provider = "openrouter".to_string();
+            config.providers.openrouter = Some(OpenRouterConfig {
+                api_key: key.to_string(),
+            });
+        }
+    }
+
+    // Save config
+    if let Err(e) = config.save() {
+        eprintln!("⚠️  Failed to save config.toml: {}", e);
+    } else {
+        println!("  ✓ Created config.toml");
+    }
+
     Ok(())
 }
 

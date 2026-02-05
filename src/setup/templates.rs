@@ -295,3 +295,52 @@ These files are your memory across sessions. Read them. Update them. Evolve.
 
 _This file is yours to create._
 "#;
+
+pub fn skills_readme_template() -> &'static str {
+    r#"# Skills Directory
+
+This directory contains modular skills for extending Nanobot's capabilities.
+
+## What are Skills?
+
+Skills are self-contained extensions that provide new tools and capabilities. Each skill is defined by a `SKILL.md` file in its own subdirectory.
+
+## Creating a Skill
+
+Use the CLI to create a new skill scaffold:
+
+```bash
+nanobot skills create my-skill --category automation
+```
+
+This creates `skills/my-skill/SKILL.md` with a template to fill out.
+
+## Managing Skills
+
+```bash
+# List all skills
+nanobot skills list
+
+# Enable a skill
+nanobot skills enable my-skill
+
+# Disable a skill
+nanobot skills disable my-skill
+```
+
+## Example Skills (from OpenClaw)
+
+- `github` - Interact with GitHub using the `gh` CLI
+- `notion` - Manage Notion pages and databases
+- `weather` - Get weather information
+- `spotify` - Control Spotify player
+
+## SKILL.md Format
+
+See the Skills documentation for the full SKILL.md format specification.
+
+---
+
+_Add your skills here to extend Nanobot!_
+"#
+}

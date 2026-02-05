@@ -18,6 +18,7 @@ pub mod web_search_tool;
 pub mod run_command_tool;
 pub mod policy;
 pub mod subagent_tools;
+pub mod browser_tool;
 
 
 

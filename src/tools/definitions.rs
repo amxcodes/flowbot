@@ -140,6 +140,19 @@ pub fn get_tool_declarations() -> Vec<Value> {
                 "required": ["command"]
             }
         }),
+        // Browser Tool
+        serde_json::json!({
+            "name": "browser_open",
+            "description": "Open a URL in a headless browser",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "The URL to visit"},
+                    "action": {"type": "string", "enum": ["extract_text", "screenshot"], "description": "Action (default: extract_text)"}
+                },
+                "required": ["url"]
+            }
+        }),
     ]
 }
 
@@ -163,6 +176,7 @@ pub fn get_tool_registry() -> &'static ToolRegistry {
         registry.register(Box::new(super::list_directory_tool::ListDirectoryTool));
         registry.register(Box::new(super::web_search_tool::WebSearchTool));
         registry.register(Box::new(super::run_command_tool::RunCommandTool));
+        registry.register(Box::new(super::browser_tool::BrowserTool));
         
         registry
     });

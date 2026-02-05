@@ -96,6 +96,17 @@ enum Commands {
         #[command(subcommand)]
         action: MemoryAction,
     },
+    /// Manage Skills (extensible tools/plugins)
+    Skills {
+        #[command(subcommand)]
+        action: SkillsAction,
+    },
+    /// Start WebChat UI (embedded web interface)
+    WebChat {
+        /// Port to listen on (default: 3030)
+        #[arg(short, long, default_value = "3030")]
+        port: u16,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -113,6 +124,34 @@ enum MemoryAction {
         /// Workspace directory to index
         #[arg(long)]
         workspace: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum SkillsAction {
+    /// List all available skills
+    List {
+        /// Show all skills including disabled ones
+        #[arg(long)]
+        all: bool,
+    },
+    /// Enable a skill
+    Enable {
+        /// Skill name
+        name: String,
+    },
+    /// Disable a skill
+    Disable {
+        /// Skill name
+        name: String,
+    },
+    /// Create a new skill scaffold
+    Create {
+        /// Skill name
+        name: String,
+        /// Category: automation, integration, productivity, custom
+        #[arg(long, default_value = "custom")]
+        category: String,
     },
 }
 
@@ -208,6 +247,7 @@ enum WorkspaceCommands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    human_panic::setup_panic!();
     let args = Args::parse();
 
     match args.command {
@@ -455,6 +495,10 @@ async fn main() -> Result<()> {
             let gateway = gateway::Gateway::new(config, agent_tx);
             gateway.start().await?;
         }
+        Commands::WebChat { port } => {
+            println!("🚀 Starting WebChat UI on port {}...", port);
+            flowbot_rs::web::run_server(port).await?;
+        }
         Commands::Security { action } => {
             match action {
                 SecurityAction::Audit => {
@@ -464,6 +508,99 @@ async fn main() -> Result<()> {
                         eprintln!("❌ Error running checks: {}", e);
                     }
                     auditor.print_report();
+                }
+            }
+        }
+        Commands::Skills { action } => {
+            use flowbot_rs::skills::SkillLoader;
+            
+            let workspace_dir = std::env::current_dir()?;
+            let mut loader = SkillLoader::new(workspace_dir);
+            loader.scan()?;
+            
+            match action {
+                SkillsAction::List { all } => {
+                    let skills: Vec<_> = if *all {
+                        loader.skills().values().collect()
+                    } else {
+                        loader.enabled_skills().collect()
+                   };
+                    
+                    if skills.is_empty() {
+                        println!("\n📦 No skills found.");
+                        println!("💡 Create a new skill with: nanobot skills create <name>\n");
+                    } else {
+                        println!("\n📦 Available Skills:\n");
+                        println!("{:<20} {:<15} {:<10} {}", "Name", "Category", "Status", "Tools");
+                        println!("{}", "-".repeat(70));
+                        
+                        for skill in skills {
+                            let enabled_mark = if skill.enabled { "✓" } else { "✗" };
+                            let tools_count = skill.tools.len();
+                            println!(
+                                "{:<20} {:<15} {:<10} {}",
+                                skill.name,
+                                skill.category,
+                                format!("{} {}", enabled_mark, skill.status),
+                                format!("{} tools", tools_count)
+                            );
+                        }
+                        println!();
+                    }
+                }
+                SkillsAction::Enable { name } => {
+                    loader.enable_skill(name)?;
+                    println!("✓ Enabled skill: {}", name);
+                }
+                SkillsAction::Disable { name } => {
+                    loader.disable_skill(name)?;
+                    println!("✓ Disabled skill: {}", name);
+                }
+                SkillsAction::Create { name, category } => {
+                    let skills_dir = std::env::current_dir()?.join("skills");
+                    tokio::fs::create_dir_all(&skills_dir).await?;
+                    
+                    let skill_dir = skills_dir.join(name);
+                    tokio::fs::create_dir_all(&skill_dir).await?;
+                    
+                    let skill_template = format!(r#"---
+name: {}
+description: "A custom skill"
+category: {}
+status: active
+---
+
+# {} Skill
+
+Brief description of what this skill does.
+
+## Tools Provided
+
+- `{}_tool`: Description of the tool
+
+## Configuration
+
+```toml
+[skills.{}]
+enabled = true
+```
+
+## Usage Examples
+
+```
+> Use {}_tool to do something
+✓ Done!
+```
+
+## Implementation Notes
+
+Add any notes about how this skill works.
+"#, name, category, name, name, name, name);
+                    
+                    tokio::fs::write(skill_dir.join("SKILL.md"), skill_template).await?;
+                    
+                    println!("✓ Created new skill: {}", name);
+                    println!("📝 Edit: {}/SKILL.md", skill_dir.display());
                 }
             }
         }
@@ -614,7 +751,7 @@ async fn run_rich_tui_chat(provider: Option<String>) -> Result<()> {
         "antigravity" => {
             let client = antigravity::AntigravityClient::from_env().await?;
             let agent = client.agent("gemini-2.5-flash").preamble(&preamble).build();
-            run_rich_loop(tui, agent, &persistence, &session_id).await
+            run_rich_loop(tui, agent, &persistence, &memory_manager, &session_id).await
         }
         _ => {
             let client = get_openai_like_client(&provider_name, &config)?;
@@ -624,7 +761,7 @@ async fn run_rich_tui_chat(provider: Option<String>) -> Result<()> {
                 _ => "gpt-4o",
             };
             let agent = client.agent(model_name).preamble(&preamble).build();
-            run_rich_loop(tui, agent, &persistence, &session_id).await
+            run_rich_loop(tui, agent, &persistence, &memory_manager, &session_id).await
         }
     }
 }
@@ -633,6 +770,7 @@ async fn run_rich_loop<P: Prompt>(
     mut tui: flowbot_rs::ui::tui::TuiManager,
     agent: P,
     persistence: &PersistenceManager,
+    memory_manager: &flowbot_rs::memory::vector_store::MemoryManager,
     session_id: &str,
 ) -> Result<()> {
     loop {
@@ -647,24 +785,48 @@ async fn run_rich_loop<P: Prompt>(
                 log::info!("> {}", input);
                 persistence.save_message(session_id, "user", &input).ok();
                 
-                // Prompt Agent (this blocks TUI drawing currently)
+                // RAG Retrieval
+                let mut full_input = input.clone();
+                let results = memory_manager.search(&input, 3).await.unwrap_or_default();
+                if !results.is_empty() {
+                    let context_str = results.iter()
+                        .map(|(score, entry)| format!("- {} (similarity: {:.2})", entry.content, score))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    
+                    full_input = format!("Context from memory:\n{}\n\nUser Query: {}", context_str, input);
+                    log::info!("🧠 Retrieved {} memory items", results.len());
+                }
+                
+                // Prompt Agent
                 // TODO: Move to background task for non-blocking UI
-                match agent.prompt(&input).await {
+                match agent.prompt(&full_input).await {
                     Ok(response) => {
                         log::info!("Bot: {}", response);
                         persistence.save_message(session_id, "assistant", &response).ok();
                         
-                        // Handle tool calls if any (basic support for now)
-                        if tools::executor::is_tool_call(&response) {
-                             log::info!("🔧 Executing tool...");
-                             match tools::executor::execute_tool(&response, None, None, None).await {
-                                Ok(res) => log::info!("✓ Result: {}", res),
-                                Err(e) => log::error!("✗ Error: {}", e),
-                             }
+                        // Save to Long Term Memory
+                        let mut metadata = std::collections::HashMap::new();
+                        metadata.insert("role".to_string(), "user".to_string());
+                        metadata.insert("session_id".to_string(), session_id.to_string());
+                        metadata.insert("type".to_string(), "conversation".to_string());
+                        
+                        let memory_content = format!("User: {}\nAssistant: {}", input, response);
+                        if let Err(e) = memory_manager.add_document(&memory_content, metadata).await {
+                             log::error!("Failed to save memory: {}", e);
                         }
+
+                        // Handle tool calls if any
+                        if tools::executor::is_tool_call(&response) {
+                              log::info!("🔧 Executing tool...");
+                              match tools::executor::execute_tool(&response, None, None, None).await {
+                                 Ok(res) => log::info!("✓ Result: {}", res),
+                                 Err(e) => log::error!("✗ Error: {}", e),
+                              }
+                         }
                     }
                     Err(e) => {
-                        log::error!("Error parsing response: {}", e);
+                        log::error!("Error: {}", e);
                     }
                 }
             }
@@ -674,6 +836,7 @@ async fn run_rich_loop<P: Prompt>(
     
     tui.stop()?;
     Ok(())
+}
 }
 
 async fn run_legacy_chat(provider: Option<String>) -> Result<()> {
