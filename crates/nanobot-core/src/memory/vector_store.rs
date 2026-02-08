@@ -58,7 +58,7 @@ impl MemoryManager {
     }
 
     fn ensure_schema(&self) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database lock poisoned: {}", e))?;
 
         // Main documents table
         conn.execute(
@@ -87,7 +87,7 @@ impl MemoryManager {
     }
 
     pub fn load_index(&self) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database lock poisoned: {}", e))?;
         let mut stmt = conn.prepare("SELECT id, path, content, metadata, vector FROM documents")?;
 
         let rows = stmt.query_map([], |row| {
@@ -112,7 +112,7 @@ impl MemoryManager {
             })
         })?;
 
-        let mut cache = self.vector_cache.lock().unwrap();
+        let mut cache = self.vector_cache.lock().map_err(|e| anyhow::anyhow!("Cache lock poisoned: {}", e))?;
         cache.clear();
 
         for row in rows {
@@ -163,7 +163,7 @@ impl MemoryManager {
         let vector_blob_clone = vector_blob.clone();
 
         tokio::task::spawn_blocking(move || {
-            let mut conn = conn.lock().unwrap();
+            let mut conn = conn.lock().expect("Database lock should not be poisoned");
             let tx = conn.transaction()?;
             
             // Insert Main
@@ -191,7 +191,7 @@ impl MemoryManager {
             vector: vector.to_vec(),
         };
 
-        let mut lock = self.vector_cache.lock().unwrap();
+        let mut lock = self.vector_cache.lock().map_err(|e| anyhow::anyhow!("Cache lock poisoned: {}", e))?;
         lock.push(entry);
 
         Ok(())
@@ -235,7 +235,7 @@ impl MemoryManager {
     }
 
     pub fn remove_document_by_path(&self, path: &str) -> Result<()> {
-        let conn_lock = self.conn.lock().unwrap();
+        let conn_lock = self.conn.lock().map_err(|e| anyhow::anyhow!("Database lock poisoned: {}", e))?;
 
         let path_str = path.to_string();
         conn_lock.execute("DELETE FROM documents WHERE path = ?1", params![path_str])?;
@@ -323,6 +323,7 @@ impl MemoryManager {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self), fields(query_len = query.len(), limit))]
     pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<(f32, VectorEntry)>> {
         // 1. Vector Search (In-Memory)
         let query_embeddings = self.provider.embed(vec![query]).await?;

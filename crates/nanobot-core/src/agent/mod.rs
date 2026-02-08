@@ -1,16 +1,17 @@
 use crate::antigravity::AntigravityClient;
-use crate::persistence::PersistenceManager;
+use crate::context::ContextTree;
 use anyhow::Result;
 use futures::StreamExt;
 use rig::OneOrMany;
 use rig::client::CompletionClient;
 use rig::completion::message::{AssistantContent, Text, UserContent};
-use rig::completion::{CompletionModel, CompletionRequest, Message};
+use rig::completion::{CompletionModel, CompletionRequest, Message, Document};
 use rig::streaming::StreamedAssistantContent;
 use serde_json::json;
 use tokio::sync::mpsc;
 
 pub mod personality;
+pub mod supervisor;
 use std::path::PathBuf;
 
 // Define message types for internal communication
@@ -38,6 +39,7 @@ use std::pin::Pin;
 pub enum AgentProvider {
     Antigravity(crate::antigravity::AntigravityCompletionModel),
     OpenAI(openai::CompletionModel),
+    Meta(crate::llm::meta_provider::MetaCompletionModel),
 }
 
 impl AgentProvider {
@@ -48,10 +50,7 @@ impl AgentProvider {
         Pin<
             Box<
                 dyn Stream<
-                        Item = Result<
-                            StreamedAssistantContent<String>,
-                            rig::completion::CompletionError,
-                        >,
+                        Item = Result<StreamedAssistantContent<String>, rig::completion::CompletionError>,
                     > + Send,
             >,
         >,
@@ -98,75 +97,102 @@ impl AgentProvider {
                 });
                 Ok(Box::pin(mapped))
             }
+            AgentProvider::Meta(_m) => {
+                Err(rig::completion::CompletionError::ProviderError(
+                    "MetaProvider streaming not yet implemented".to_string()
+                ))
+            }
         }
     }
 }
 
 pub struct AgentLoop {
     provider: AgentProvider,
-    persistence: PersistenceManager,
+    context_tree: std::sync::Arc<ContextTree>,
+    skill_loader: Option<std::sync::Arc<tokio::sync::Mutex<crate::skills::SkillLoader>>>,
     cron_scheduler: crate::cron::CronScheduler,
     agent_manager: std::sync::Arc<crate::gateway::agent_manager::AgentManager>,
     memory_manager: std::sync::Arc<crate::memory::MemoryManager>,
+    mcp_manager: Option<std::sync::Arc<crate::mcp::McpManager>>,
     workspace_watcher: Option<crate::memory::WorkspaceWatcher>,
     personality: Option<personality::PersonalityContext>,
     cron_event_rx: Option<tokio::sync::mpsc::Receiver<crate::cron::CronEvent>>,
     last_interaction:
         std::sync::Arc<tokio::sync::Mutex<Option<(String, mpsc::Sender<StreamChunk>)>>>,
+    permission_manager: std::sync::Arc<tokio::sync::Mutex<crate::tools::PermissionManager>>,
+    resource_monitor: std::sync::Arc<crate::system::resources::ResourceMonitor>,
+    #[cfg(feature = "browser")]
+    browser_client: Option<crate::browser::BrowserClient>,
 }
 
 impl AgentLoop {
     pub async fn new() -> Result<Self> {
         let config = config::Config::load()?;
-        let default = config.default_provider.as_str();
+        
+        // Priority 1: Check for LLM failover config
+        let provider = if let Some(llm_config) = config.llm.clone() {
+            tracing::info!("Using MetaProvider with failover chain: {:?}", llm_config.failover_chain);
+            
+            let meta_client = crate::llm::meta_provider::MetaClient::new(llm_config.clone()).await?;
+            // Use a default model name - providers will use their configured models
+            let model_name = "gemini-2.0-flash-001".to_string();
+            
+            AgentProvider::Meta(
+                crate::llm::meta_provider::MetaCompletionModel::make(&meta_client, model_name)
+            )
+        } else {
+            // Priority 2: Fall back to traditional default_provider
+            let default = config.default_provider.as_str();
+            
+            match default {
+                "antigravity" => {
+                    let client = AntigravityClient::from_env().await?;
+                    AgentProvider::Antigravity(client.completion_model("gemini-2.0-flash-exp"))
+                }
+                "openrouter" => {
+                    let api_key = config
+                        .providers
+                        .openrouter
+                        .as_ref()
+                        .map(|c| c.api_key.clone())
+                        .ok_or_else(|| anyhow::anyhow!("OpenRouter API key not configured"))?;
 
-        let provider = match default {
-            "antigravity" => {
-                let client = AntigravityClient::from_env().await?;
-                AgentProvider::Antigravity(client.completion_model("gemini-2.0-flash-exp"))
-            }
-            "openrouter" => {
-                let api_key = config
-                    .providers
-                    .openrouter
-                    .as_ref()
-                    .map(|c| c.api_key.clone())
-                    .ok_or_else(|| anyhow::anyhow!("OpenRouter API key not configured"))?;
+                    let client = openai::Client::new(&api_key)?;
+                    // Use completions_api to return CompletionModel instead of ResponsesCompletionModel
+                    AgentProvider::OpenAI(
+                        client
+                            .completions_api()
+                            .completion_model("google/gemini-2.0-flash-001"),
+                    )
+                }
+                "openai" | _ => {
+                    let api_key = std::env::var("OPENAI_API_KEY")
+                        .or_else(|_| {
+                            config
+                                    .providers
+                                    .openai
+                                    .as_ref()
+                                    .map(|c| c.api_key.clone())
+                                    .ok_or(String::new())
+                        })
+                        .map_err(|_| anyhow::anyhow!("OpenAI API Key missing"))?;
 
-                let client = openai::Client::new(&api_key)?;
-                // Use completions_api to return CompletionModel instead of ResponsesCompletionModel
-                AgentProvider::OpenAI(
-                    client
-                        .completions_api()
-                        .completion_model("google/gemini-2.0-flash-001"),
-                )
-            }
-            "openai" | _ => {
-                let api_key = std::env::var("OPENAI_API_KEY")
-                    .or_else(|_| {
-                        config
-                            .providers
-                            .openai
-                            .as_ref()
-                            .map(|c| c.api_key.clone())
-                            .ok_or(String::new())
-                    })
-                    .map_err(|_| anyhow::anyhow!("OpenAI API Key missing"))?;
-
-                let client = openai::Client::new(&api_key)?;
-                // Use completions_api to return CompletionModel
-                AgentProvider::OpenAI(client.completions_api().completion_model("gpt-4o"))
+                    let client = openai::Client::new(&api_key)?;
+                    // Use completions_api to return CompletionModel
+                    AgentProvider::OpenAI(client.completions_api().completion_model("gpt-4o"))
+                }
             }
         };
 
-        let db_path = PathBuf::from(".").join(".nanobot").join("sessions.db");
+        let db_path = PathBuf::from(".").join(".nanobot").join("context_tree.db");
 
         if let Some(parent) = db_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        let persistence = PersistenceManager::new(db_path.clone());
-        persistence.init()?;
+        let context_tree = std::sync::Arc::new(ContextTree::new(
+            db_path.to_str().ok_or_else(|| anyhow::anyhow!("Invalid db path"))?
+        )?);
 
         // Create channel for cron events
         let (cron_event_tx, cron_event_rx) = tokio::sync::mpsc::channel(100);
@@ -230,6 +256,27 @@ impl AgentLoop {
             }
         };
 
+        // Initialize Skills Loader
+        let skills_path = workspace_dir.join("skills");
+        let skill_loader = if skills_path.exists() {
+            let mut loader = crate::skills::SkillLoader::new(skills_path.clone());
+            match loader.scan() {
+                Ok(_) => {
+                    let skill_count = loader.skills().len();
+                    if skill_count > 0 {
+                        eprintln!("📦 Loaded {} skills from {:?}", skill_count, skills_path);
+                    }
+                    Some(std::sync::Arc::new(tokio::sync::Mutex::new(loader)))
+                }
+                Err(e) => {
+                    eprintln!("⚠️  Failed to load skills: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         let personality = if workspace_dir.exists() {
             match personality::PersonalityContext::load(&workspace_dir).await {
                 Ok(p) => {
@@ -249,16 +296,71 @@ impl AgentLoop {
             None
         };
 
+        // Initialize Permission Manager with workspace scope
+        let workspace_root = std::env::current_dir()?;
+        let security_profile = crate::tools::permissions::SecurityProfile::standard(workspace_root);
+        let permission_manager = std::sync::Arc::new(tokio::sync::Mutex::new(
+            crate::tools::PermissionManager::new(security_profile)
+        ));
+
+        // Initialize Resource Monitor
+        let resource_monitor = std::sync::Arc::new(crate::system::resources::ResourceMonitor::new());
+        resource_monitor.start_monitoring().await;
+
+        // Initialize MCP Manager
+        let mcp_manager = if let Some(mcp_config) = config.mcp.as_ref() {
+            if mcp_config.enabled && !mcp_config.servers.is_empty() {
+                let manager = std::sync::Arc::new(crate::mcp::McpManager::new());
+                
+                for server_config in &mcp_config.servers {
+                    match manager.add_server(server_config.clone()).await {
+                        Ok(_) => {},
+                        Err(e) => {
+                            eprintln!("⚠️  Failed to connect to MCP server '{}': {}", server_config.name, e);
+                        }
+                    }
+                }
+                
+                let tool_count = manager.tool_count().await;
+                if tool_count > 0 {
+                    eprintln!("🔌 MCP: Loaded {} tools from {} servers", tool_count, manager.server_count().await);
+                }
+                
+                // Start health check loop
+                manager.start_health_check();
+                
+                Some(manager)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Initialize Browser Client
+        #[cfg(feature = "browser")]
+        let browser_client = if let Some(browser_config) = config.browser {
+            Some(crate::browser::BrowserClient::new(browser_config))
+        } else {
+            None
+        };
+
         Ok(Self {
             provider,
-            persistence,
+            context_tree,
+            skill_loader,
             cron_scheduler,
             agent_manager,
             memory_manager,
+            mcp_manager,
             workspace_watcher,
             personality,
             cron_event_rx: Some(cron_event_rx),
             last_interaction: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
+            permission_manager,
+            resource_monitor,
+            #[cfg(feature = "browser")]
+            browser_client,
         })
     }
 
@@ -416,18 +518,41 @@ impl AgentLoop {
         }
     }
 
+    // Agent turn loop - Process one message with streaming
+    #[tracing::instrument(skip(self, msg), fields(session_id = %msg.session_id))]
     async fn process_streaming(&self, msg: AgentMessage) {
+        // Get adaptive configuration based on current resources
+        let adaptive_config = self.resource_monitor.get_adaptive_config();
+        let resource_level = self.resource_monitor.get_resource_level();
+        
+        // Warn user if resources are constrained
+        if resource_level != crate::system::resources::ResourceLevel::High {
+            let level_str = match resource_level {
+                crate::system::resources::ResourceLevel::Low => "LOW (Throttled)",
+                crate::system::resources::ResourceLevel::Medium => "MEDIUM (Limited)",
+                crate::system::resources::ResourceLevel::High => unreachable!(),
+            };
+            let _ = msg.response_tx.send(StreamChunk::TextDelta(
+                format!("⚠️ Resource Mode: {} | Context: {} msgs | RAG: {} docs | Tokens: {}\n\n",
+                    level_str,
+                    adaptive_config.context_history_limit,
+                    adaptive_config.rag_doc_count,
+                    adaptive_config.max_tokens
+                )
+            )).await;
+        }
+
         if let Err(e) = self.save_message(&msg.session_id, "user", &msg.content) {
             eprintln!("Failed to save user message: {}", e);
         }
 
-        let mut chat_history = match self.persistence.get_history(&msg.session_id) {
-            Ok(h) => h,
-            Err(e) => {
-                eprintln!("Failed to load history: {}", e);
-                Vec::new()
-            }
-        };
+        let mut chat_history = self.get_conversation_history(&msg.session_id);
+
+        // Apply adaptive context history limit
+        if chat_history.len() > adaptive_config.context_history_limit {
+            let skip = chat_history.len() - adaptive_config.context_history_limit;
+            chat_history = chat_history.into_iter().skip(skip).collect();
+        }
 
         chat_history.push(Message::User {
             content: OneOrMany::one(UserContent::Text(Text {
@@ -463,14 +588,35 @@ impl AgentLoop {
                 )
             };
 
+            // Auto-RAG: Retrieve relevant context from Memory (with adaptive limit)
+            let context_docs = match self.memory_manager.search(&msg.content, adaptive_config.rag_doc_count).await {
+                Ok(results) => {
+                    if !results.is_empty() {
+                         tracing::info!("📚 RAG: Found {} relevant documents", results.len());
+                    }
+                    results.into_iter().map(|(_score, entry)| {
+                        Document {
+                            id: entry.id,
+                            text: entry.content,
+                            additional_props: entry.metadata,
+                        }
+                    }).collect()
+                }
+                Err(e) => {
+                    tracing::error!("RAG Search failed: {}", e);
+                    vec![]
+                }
+            };
+
             let request = CompletionRequest {
-                chat_history: OneOrMany::many(chat_history.clone()).unwrap(),
+                chat_history: OneOrMany::many(chat_history.clone())
+                    .expect("Chat history should convert to OneOrMany::Many"),
                 preamble: Some(system_msg),
-                max_tokens: Some(4096),
+                max_tokens: Some(adaptive_config.max_tokens),  // ADAPTIVE
                 temperature: Some(0.7),
                 tools: vec![],
                 tool_choice: None,
-                documents: vec![],
+                documents: context_docs,
                 additional_params: Some(json!({})),
             };
 
@@ -567,6 +713,10 @@ impl AgentLoop {
                             Some(&self.cron_scheduler),
                             Some(&self.agent_manager),
                             Some(&self.memory_manager),
+                            Some(&*self.permission_manager),
+                            self.skill_loader.as_ref(),
+                            #[cfg(feature = "browser")]
+                            self.browser_client.as_ref(),
                         )
                         .await
                         {
@@ -597,6 +747,64 @@ impl AgentLoop {
     }
 
     fn save_message(&self, session_id: &str, role: &str, content: &str) -> Result<()> {
-        self.persistence.save_message(session_id, role, content)
+        // Get current active leaf as parent
+        let parent_id = self.context_tree.get_active_leaf(session_id)?;
+        
+        // Add message to tree
+        self.context_tree.add_message(
+            session_id,
+            role,
+            content,
+            parent_id,
+            None, // model can be added later if needed
+        )?;
+        
+        Ok(())
+    }
+
+    fn get_conversation_history(&self, session_id: &str) -> Vec<Message> {
+        // Get active leaf and reconstruct trace
+        match self.context_tree.get_active_leaf(session_id) {
+            Ok(Some(leaf_id)) => {
+                // Get trace from root to leaf
+                match self.context_tree.get_trace(&leaf_id) {
+                    Ok(nodes) => {
+                        // Convert ContextNode to rig::Message
+                        nodes.iter().map(|node| {
+                            match node.role.as_str() {
+                                "user" => Message::User {
+                                    content: OneOrMany::one(UserContent::Text(Text {
+                                        text: node.content.clone(),
+                                    })),
+                                },
+                                "assistant" => Message::Assistant {
+                                    id: None,
+                                    content: OneOrMany::one(AssistantContent::Text(Text {
+                                        text: node.content.clone(),
+                                    })),
+                                },
+                                _ => Message::User {
+                                    content: OneOrMany::one(UserContent::Text(Text {
+                                        text: node.content.clone(),
+                                    })),
+                                },
+                            }
+                        }).collect()
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to load conversation trace: {}", e);
+                        Vec::new()
+                    }
+                }
+            }
+            Ok(None) => {
+                // No history for this session yet
+                Vec::new()
+            }
+            Err(e) => {
+                eprintln!("Failed to get active leaf: {}", e);
+                Vec::new()
+            }
+        }
     }
 }

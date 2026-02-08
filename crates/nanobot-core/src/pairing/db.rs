@@ -20,7 +20,7 @@ pub struct PairingRequest {
 
 /// Initialize the database with pairing tables
 pub async fn init_database() -> Result<()> {
-    let conn = DB_CONN.lock().unwrap();
+    let conn = DB_CONN.lock().map_err(|e| anyhow::anyhow!("Database lock poisoned: {}", e))?;
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS pairing_requests (
@@ -76,7 +76,7 @@ pub async fn insert_pairing_request(
     created_at: i64,
     expires_at: i64,
 ) -> Result<()> {
-    let conn = DB_CONN.lock().unwrap();
+    let conn = DB_CONN.lock().map_err(|e| anyhow::anyhow!("Database lock poisoned: {}", e))?;
     conn.execute(
         "INSERT INTO pairing_requests (channel, user_id, username, code, created_at, expires_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -86,7 +86,7 @@ pub async fn insert_pairing_request(
 }
 
 pub async fn is_user_authorized(channel: &str, user_id: &str) -> Result<bool> {
-    let conn = DB_CONN.lock().unwrap();
+    let conn = DB_CONN.lock().map_err(|e| anyhow::anyhow!("Database lock poisoned: {}", e))?;
     let mut stmt =
         conn.prepare("SELECT COUNT(*) FROM authorized_users WHERE channel = ?1 AND user_id = ?2")?;
 
@@ -95,7 +95,7 @@ pub async fn is_user_authorized(channel: &str, user_id: &str) -> Result<bool> {
 }
 
 pub async fn get_user_pending_code(channel: &str, user_id: &str) -> Result<Option<String>> {
-    let conn = DB_CONN.lock().unwrap();
+    let conn = DB_CONN.lock().map_err(|e| anyhow::anyhow!("Database lock poisoned: {}", e))?;
     let mut stmt =
         conn.prepare("SELECT code FROM pairing_requests WHERE channel = ?1 AND user_id = ?2")?;
 
@@ -109,7 +109,7 @@ pub async fn get_user_pending_code(channel: &str, user_id: &str) -> Result<Optio
 }
 
 pub async fn get_pending_requests_for_channel(channel: &str) -> Result<Vec<PairingRequest>> {
-    let conn = DB_CONN.lock().unwrap();
+    let conn = DB_CONN.lock().map_err(|e| anyhow::anyhow!("Database lock poisoned: {}", e))?;
     let mut stmt = conn.prepare(
         "SELECT channel, user_id, username, code, created_at, expires_at 
          FROM pairing_requests WHERE channel = ?1 ORDER BY created_at DESC",
@@ -135,7 +135,7 @@ pub async fn get_pending_requests_for_channel(channel: &str) -> Result<Vec<Pairi
 }
 
 pub async fn get_all_pending_requests() -> Result<Vec<PairingRequest>> {
-    let conn = DB_CONN.lock().unwrap();
+    let conn = DB_CONN.lock().map_err(|e| anyhow::anyhow!("Database lock poisoned: {}", e))?;
     let mut stmt = conn.prepare(
         "SELECT channel, user_id, username, code, created_at, expires_at 
          FROM pairing_requests ORDER BY channel, created_at DESC",
@@ -161,7 +161,7 @@ pub async fn get_all_pending_requests() -> Result<Vec<PairingRequest>> {
 }
 
 pub async fn get_request_by_code(channel: &str, code: &str) -> Result<Option<PairingRequest>> {
-    let conn = DB_CONN.lock().unwrap();
+    let conn = DB_CONN.lock().map_err(|e| anyhow::anyhow!("Database lock poisoned: {}", e))?;
     let mut stmt = conn.prepare(
         "SELECT channel, user_id, username, code, created_at, expires_at 
          FROM pairing_requests WHERE channel = ?1 AND code = ?2",
@@ -191,7 +191,7 @@ pub async fn add_authorized_user(
     username: Option<&str>,
     approved_at: i64,
 ) -> Result<()> {
-    let conn = DB_CONN.lock().unwrap();
+    let conn = DB_CONN.lock().map_err(|e| anyhow::anyhow!("Database lock poisoned: {}", e))?;
     conn.execute(
         "INSERT OR REPLACE INTO authorized_users (channel, user_id, username, approved_at)
          VALUES (?1, ?2, ?3, ?4)",
@@ -201,7 +201,7 @@ pub async fn add_authorized_user(
 }
 
 pub async fn delete_pairing_request(channel: &str, code: &str) -> Result<usize> {
-    let conn = DB_CONN.lock().unwrap();
+    let conn = DB_CONN.lock().map_err(|e| anyhow::anyhow!("Database lock poisoned: {}", e))?;
     let deleted = conn.execute(
         "DELETE FROM pairing_requests WHERE channel = ?1 AND code = ?2",
         params![channel, code],
@@ -210,7 +210,7 @@ pub async fn delete_pairing_request(channel: &str, code: &str) -> Result<usize> 
 }
 
 pub async fn delete_expired_requests(now: i64) -> Result<usize> {
-    let conn = DB_CONN.lock().unwrap();
+    let conn = DB_CONN.lock().map_err(|e| anyhow::anyhow!("Database lock poisoned: {}", e))?;
     let deleted = conn.execute(
         "DELETE FROM pairing_requests WHERE expires_at < ?1",
         params![now],

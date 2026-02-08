@@ -1,5 +1,14 @@
 // Gateway module - entry point for the API server
 pub mod agent_manager;
+pub mod adapter;
+pub mod router;
+pub mod web_adapter;
+pub mod telegram_adapter;
+pub mod registry;
+pub mod slack_adapter;
+pub mod discord_adapter;
+
+
 
 use anyhow::Result;
 use axum::{
@@ -65,8 +74,45 @@ async fn ws_handler(
 
 async fn handle_socket(socket: WebSocket, gateway: Arc<Gateway>) {
     let (mut ws_tx, mut ws_rx) = socket.split();
-    let session_id = uuid::Uuid::new_v4().to_string(); // Simple session ID
-    println!("New WebSocket connection: {}", session_id);
+    
+    // Wait for initial message - check if client provides session_id
+    let session_id = if let Some(Ok(WsMessage::Text(first_msg))) = ws_rx.next().await {
+        if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&first_msg) {
+            // Check for init message with session_id
+            if json_val["type"] == "init" {
+                if let Some(provided_id) = json_val["session_id"].as_str() {
+                    // Client resuming session
+                    let session = provided_id.to_string();
+                    tracing::info!("Resuming session: {}", session);
+                    session
+                } else {
+                    // New session requested
+                    let new_id = uuid::Uuid::new_v4().to_string();
+                    tracing::info!("New session: {}", new_id);
+                    
+                    // Send session_id back to client
+                    let response = json!({"type": "session_init", "session_id": new_id});
+                    let _ = ws_tx.send(WsMessage::Text(response.to_string())).await;
+                    
+                    new_id
+                }
+            } else {
+                // First message is not init, generate new session
+                uuid::Uuid::new_v4().to_string()
+            }
+        } else {
+            uuid::Uuid::new_v4().to_string()
+        }
+    } else {
+        uuid::Uuid::new_v4().to_string()
+    };
+    
+    let span = tracing::info_span!("websocket_session", session_id = %session_id);
+    let _enter = span.enter();
+    
+    
+    tracing::info!("WebSocket session established");
+    
 
     // Create channel for agent responses
     let (response_tx, mut response_rx) = mpsc::channel(100);

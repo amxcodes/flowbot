@@ -1,8 +1,7 @@
 use crate::config::Config;
-use crate::tools::ToolPolicy;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use colored::*;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Debug)]
 pub struct AuditIssue {
@@ -135,7 +134,7 @@ impl SecurityAuditor {
         let config_path = Path::new("config.toml");
         if config_path.exists() {
             // Check if it's writable by us (basic check)
-            if IsWritable(config_path) {
+            if is_writable(config_path) {
                 // This is expected for the app, but maybe not for "World".
                 // In a real security audit we'd check ACLs.
             }
@@ -183,7 +182,7 @@ impl SecurityAuditor {
 }
 
 // Helper for writable check (stub for cross-platform complexity)
-fn IsWritable(path: &Path) -> bool {
+fn is_writable(path: &Path) -> bool {
     let metadata = std::fs::metadata(path);
     match metadata {
         Ok(m) => !m.permissions().readonly(),

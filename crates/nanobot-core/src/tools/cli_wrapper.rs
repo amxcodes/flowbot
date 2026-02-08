@@ -45,6 +45,34 @@ pub async fn run_and_format(mut args: RunCommandArgs) -> Result<String> {
     // Resolve command for Windows compatibility (Parity with OpenClaw)
     args.command = resolve_command(&args.command);
 
+    // Check if Docker execution is requested
+    if args.use_docker {
+        // First check if Docker is available
+        if super::docker_executor::is_docker_available() {
+            match super::docker_executor::execute_in_container(
+                &args.command,
+                &args.args,
+                None,
+            ).await {
+                Ok(output) => {
+                    return Ok(format!(
+                        "Status: ✅ Success (Docker)\nCommand: {} {}\nOutput:\n{}",
+                        args.command,
+                        args.args.join(" "),
+                        output
+                    ));
+                }
+                Err(e) => {
+                    // Docker execution failed, fall back to host
+                    eprintln!("Docker execution failed: {}. Falling back to host.", e);
+                }
+            }
+        } else {
+            eprintln!("Docker not available. Falling back to host execution.");
+        }
+    }
+
+    // Standard host execution
     let output = run_command(args.clone()).await?;
     Ok(format_output(
         output,

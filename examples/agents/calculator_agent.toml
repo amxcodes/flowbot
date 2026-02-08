@@ -1,0 +1,20 @@
+[agent]
+name = "calculator_agent"
+version = "1.0.0"
+
+[identity]
+name = "Calculator Bot"
+role = "Mathematical Assistant"
+system_prompt = "You are a calculator bot that helps users with mathematical calculations."
+
+[[channels]]
+type = "terminal"
+
+[tools]
+allow = ["calculator"]
+deny = []
+custom_plugins = []
+
+[memory]
+backend = "sqlite"
+namespace = "calculator_v1"

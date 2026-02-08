@@ -43,9 +43,9 @@ impl ProcessManager {
         let pid = child.id().ok_or_else(|| anyhow!("Process has no PID"))?;
 
         // Setup IO
-        let stdout = child.stdout.take().unwrap();
-        let stderr = child.stderr.take().unwrap();
-        let mut stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().expect("stdout should be piped");
+        let stderr = child.stderr.take().expect("stderr should be piped");
+        let mut stdin = child.stdin.take().expect("stdin should be piped");
 
         let output_buffer = Arc::new(Mutex::new(Vec::new()));
         let buffer_clone = output_buffer.clone();
@@ -108,12 +108,14 @@ impl ProcessManager {
             kill_tx,
         };
 
-        self.processes.lock().unwrap().insert(pid, handle);
+        self.processes.lock()
+            .map_err(|e| anyhow!("Process manager lock poisoned: {}", e))?
+            .insert(pid, handle);
         Ok(pid)
     }
 
     fn append_log(buffer: &Arc<Mutex<Vec<String>>>, line: String) {
-        let mut lock = buffer.lock().unwrap();
+        let Ok(mut lock) = buffer.lock() else { return };
         if lock.len() >= 100 {
             // Max 100 lines history
             lock.remove(0);
@@ -122,9 +124,9 @@ impl ProcessManager {
     }
 
     pub fn read_output(&self, pid: u32) -> Result<String> {
-        let lock = self.processes.lock().unwrap();
+        let lock = self.processes.lock().map_err(|e| anyhow!("Process manager lock poisoned: {}", e))?;
         if let Some(handle) = lock.get(&pid) {
-            let buffer = handle.output_buffer.lock().unwrap();
+            let buffer = handle.output_buffer.lock().map_err(|e| anyhow!("Output buffer lock poisoned: {}", e))?;
             Ok(buffer.join("\n"))
         } else {
             Err(anyhow!("Process {} not found", pid))
@@ -133,7 +135,7 @@ impl ProcessManager {
 
     pub async fn write_input(&self, pid: u32, input: String) -> Result<()> {
         let tx = {
-            let lock = self.processes.lock().unwrap();
+            let lock = self.processes.lock().map_err(|e| anyhow!("Process manager lock poisoned: {}", e))?;
             if let Some(handle) = lock.get(&pid) {
                 handle.input_tx.clone()
             } else {
@@ -147,7 +149,7 @@ impl ProcessManager {
 
     pub async fn kill(&self, pid: u32) -> Result<()> {
         let tx = {
-            let mut lock = self.processes.lock().unwrap();
+            let mut lock = self.processes.lock().map_err(|e| anyhow!("Process manager lock poisoned: {}", e))?;
             if let Some(handle) = lock.remove(&pid) {
                 handle.kill_tx
             } else {

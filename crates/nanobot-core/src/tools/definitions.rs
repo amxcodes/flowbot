@@ -169,6 +169,13 @@ pub fn get_tool_registry() -> &'static ToolRegistry {
         registry.register(Box::new(super::list_directory_tool::ListDirectoryTool));
         registry.register(Box::new(super::web_search_tool::WebSearchTool));
         registry.register(Box::new(super::run_command_tool::RunCommandTool));
+        registry.register(Box::new(super::edit_file_tool::EditFileTool));
+        registry.register(Box::new(super::spawn_process_tool::SpawnProcessTool));
+        registry.register(Box::new(super::read_process_output_tool::ReadProcessOutputTool));
+        registry.register(Box::new(super::kill_process_tool::KillProcessTool));
+        registry.register(Box::new(super::web_fetch_tool::WebFetchTool));
+        registry.register(Box::new(super::write_process_input_tool::WriteProcessInputTool));
+        registry.register(Box::new(super::script_eval_tool::ScriptEvalTool));
 
         registry
     });

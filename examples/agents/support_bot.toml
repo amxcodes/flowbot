@@ -1,0 +1,26 @@
+[agent]
+name = "support_bot"
+version = "1.0.0"
+
+[identity]
+name = "Support Bot"
+role = "Customer Service Assistant"
+system_prompt = """You are a helpful customer service assistant.
+You help users with their questions and direct them to appropriate resources.
+Always be polite, clear, and concise."""
+
+[[channels]]
+type = "telegram"
+token_env = "TELEGRAM_TOKEN"
+
+[[channels]]
+type = "terminal"
+
+[tools]
+allow = ["web_search", "read_file", "calculator"]
+deny = []
+custom_plugins = []
+
+[memory]
+backend = "sqlite"
+namespace = "support_bot_v1"

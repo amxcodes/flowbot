@@ -89,10 +89,9 @@ pub async fn run_isolated_agent_turn(
 async fn execute_agent_message(
     session_id: &str,
     message: &str,
-    model_override: Option<String>,
+    _model_override: Option<String>,
 ) -> Result<String> {
     use crate::agent::AgentProvider;
-    use crate::config::Config;
     use futures::StreamExt;
     use rig::OneOrMany;
     use rig::completion::message::{Text, UserContent};

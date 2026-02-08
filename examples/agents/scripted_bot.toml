@@ -1,0 +1,40 @@
+[agent]
+name = "scripted_greeter"
+version = "1.0.0"
+
+[identity]
+name = "Scripted Greeter"
+role = "Demonstration Assistant"
+system_prompt = "You are a friendly greeter bot powered by a Rhai script."
+
+[[channels]]
+type = "terminal"
+
+[tools]
+allow = ["read_file", "write_file"]
+
+[memory]
+backend = "sqlite"
+namespace = "scripted_bot"
+
+[script]
+enabled = true
+source = """
+// Simple greeting function in Rhai
+fn handle_message(user_input) {
+    let msg = user_input.trim();
+    
+    if msg.contains("hello") || msg.contains("hi") {
+        "Hello! How can I help you today?"
+    } else if msg.contains("bye") {
+        "Goodbye! Have a great day!"
+    } else {
+        "I heard you say: " + msg
+    }
+}
+
+// Calculate simple math
+fn calculate(expr) {
+    eval(expr).to_string()
+}
+"""

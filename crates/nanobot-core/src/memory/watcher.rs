@@ -1,14 +1,13 @@
 use crate::memory::MemoryManager;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 pub struct WorkspaceWatcher {
-    watcher: RecommendedWatcher,
+    _watcher: RecommendedWatcher,
     // We keep the receiver loop handle if needed, or just let it run detached
 }
 
@@ -38,7 +37,7 @@ impl WorkspaceWatcher {
             }
         });
 
-        Ok(Self { watcher })
+        Ok(Self { _watcher: watcher })
     }
 }
 

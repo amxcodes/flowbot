@@ -9,13 +9,18 @@ use uuid::Uuid;
 
 // Import modules from nanobot-core
 use nanobot_core::{
-    agent::AgentLoop,
+    agent,
+    AgentLoop, // Re-exported at root
+    config, oauth, doctor, tools, antigravity, gateway, security,
     persistence::PersistenceManager,
-    config, oauth, doctor, tools, antigravity, telegram, gateway, security,
 };
+
+// Alias the moved telegram module to maintain compatibility
+use nanobot_core::gateway::telegram_adapter as telegram;
 
 // Local modules
 mod service;
+mod web;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -105,6 +110,37 @@ enum Commands {
     Memory {
         #[command(subcommand)]
         action: MemoryAction,
+    },
+    /// Run agent from manifest file
+    Run {
+        /// Path to agent manifest (agent.toml)
+        agent: PathBuf,
+    },
+    /// Start admin API server
+    Admin {
+        /// Port to listen on (default: 3000)
+        #[arg(short, long, default_value = "3000")]
+        port: u16,
+    },
+    /// Connect to admin API console (REPL)
+    Console {
+        /// Admin API port (default: 3000)
+        #[arg(short, long, default_value = "3000")]
+        port: u16,
+    },
+    /// Development mode with auto-rebuild on file changes
+    Dev {
+        /// Optional agent manifest to run
+        agent: Option<PathBuf>,
+        /// Port for admin API (optional)
+        #[arg(short, long)]
+        port: Option<u16>,
+    },
+    /// Start WebChat UI server
+    WebChat {
+        /// Port to listen on (default: 8080)
+        #[arg(short, long, default_value = "8080")]
+        port: u16,
     },
 }
 
@@ -429,8 +465,8 @@ async fn main() -> Result<()> {
                  tokio::fs::create_dir_all(parent).await?;
             }
             // Init minimal persistence for table creation if needed
-             let persistence = PersistenceManager::new(db_path.clone());
-             persistence.init()?;
+             let pm = PersistenceManager::new(db_path.clone());
+             pm.init()?;
 
             // Create a dummy event channel (CLI doesn't listen to events)
             let (cron_event_tx, _cron_event_rx) = tokio::sync::mpsc::channel(100);
@@ -634,7 +670,7 @@ async fn main() -> Result<()> {
                     
                     // Initialize memory manager
                     let provider = nanobot_core::memory::EmbeddingProvider::local()?;
-                    let mut manager = MemoryManager::new(db_path.clone(), provider);
+                    let manager = MemoryManager::new(db_path.clone(), provider);
                     
                     // Simple scan: find all .rs, .md, .txt files
                     println!("🔍 Scanning files...");
@@ -673,6 +709,90 @@ async fn main() -> Result<()> {
                     println!("\n✅ Re-indexing complete!");
                 }
             }
+        }
+        Commands::Run { agent } => {
+            use nanobot_core::config::agent_loader::AgentLoader;
+            
+            println!("🚀 Loading agent from manifest: {}", agent.display());
+            
+            let manifest = AgentLoader::load(&agent)?;
+            AgentLoader::validate(&manifest)?;
+            
+            println!("✅ Manifest valid!");
+            AgentLoader::info(&manifest);
+            
+            println!("\n⚠️  Full agent runtime not yet implemented.");
+            println!("   Coming soon: Channel setup, tool registration, and agent execution.");
+        }
+        Commands::Admin { port } => {
+            println!("🔧 Starting Admin API server on port {}...", port);
+            nanobot_core::server::start_admin_server(port).await?;
+        }
+        Commands::Console { port } => {
+            use nanobot_core::console::ConsoleREPL;
+            
+            println!("🎮 Starting interactive console...");
+            let mut repl = ConsoleREPL::new(port);
+            repl.run().await?;
+        }
+        Commands::Dev { agent, port } => {
+            println!("🔥 Starting development mode with auto-rebuild...");
+            println!("   Press Ctrl+C to stop");
+            
+            // Check if cargo-watch is installed
+            let check = std::process::Command::new("cargo")
+                .args(["watch", "--version"])
+                .output();
+            
+            if check.is_err() || !check.unwrap().status.success() {
+                eprintln!("❌ cargo-watch is not installed!");
+                eprintln!("   Install it with: cargo install cargo-watch");
+                return Err(anyhow::anyhow!("cargo-watch not found"));
+            }
+            
+            // Build the watch command
+            let mut args = vec!["watch", "-x", "run", "--"];
+            
+            if let Some(ref agent_path) = agent {
+                args.push("run");
+                args.push(agent_path.to_str().unwrap());
+            }
+            
+            let port_string;
+            if let Some(admin_port) = port {
+                args.push("admin");
+                args.push("--port");
+                port_string = admin_port.to_string();
+                args.push(&port_string);
+            }
+            
+            println!("   Running: cargo {}", args.join(" "));
+            
+            let status = std::process::Command::new("cargo")
+                .args(&args)
+                .status()?;
+            
+            if !status.success() {
+                return Err(anyhow::anyhow!("cargo watch failed"));
+            }
+        }
+        Commands::WebChat { port } => {
+            use nanobot_core::agent::AgentLoop;
+            
+            println!("🌐 Starting WebChat UI server on port {}...", port);
+            println!("⚙️  Initializing agent...");
+            
+            // Create agent loop with all features
+            let mut agent = AgentLoop::new().await?;
+            let (agent_tx, agent_rx) = tokio::sync::mpsc::channel(100);
+            
+            // Spawn agent loop in background
+            tokio::spawn(async move {
+                agent.run(agent_rx).await;
+            });
+            
+            // Run web server with agent connection
+            web::run_server(port, agent_tx).await?;
         }
         Commands::Service { action } => {
             use service::{ServiceManager, ServiceResponse, ServiceInfo};
@@ -922,54 +1042,30 @@ async fn run_rich_tui_chat(provider: Option<String>) -> Result<()> {
     let mut tui = nanobot_cli::ui::tui::TuiManager::new()?;
     tui.start()?;
 
-    // Load Config and Provider
-    let config = config::Config::load()?;
-    let provider_name = provider.unwrap_or(config.default_provider.clone());
-    let preamble = format!(
-        "You are nanobot, a helpful AI assistant with tool access.\n{}",
-        tools::executor::get_tool_descriptions()
-    );
+    // Initialize AgentLoop
+    // Note: This ignores the 'provider' argument and uses config.toml for now, matching run_cli_agent behavior.
+    // Future improvement: Add override support to AgentLoop::new()
+    let agent_loop = nanobot_core::agent::AgentLoop::new().await?;
+    
+    // Create channels
+    let (agent_tx, agent_rx) = tokio::sync::mpsc::channel(100);
+    
+    // Spawn AgentLoop
+    tokio::spawn(async move {
+        agent_loop.run(agent_rx).await;
+    });
 
-    // Initialize Persistence
-    let db_path = PathBuf::from(".").join(".nanobot").join("sessions.db");
-    if let Some(parent) = db_path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-    }
-    let persistence = PersistenceManager::new(db_path);
-    persistence.init()?;
     let session_id = Uuid::new_v4().to_string();
 
     log::info!("Starting session: {}", session_id);
-    log::info!("Provider: {}", provider_name);
-    log::info!("Type your message and press Enter. Ctrl+C to quit.");
+    log::info!("AgentLoop active. Type your message and press Enter. Ctrl+C to quit.");
 
-    // Setup Agent
-    // Note: We need to box the agent to handle different types if we wanted to be generic,
-    // but for now let's just use the same match logic as legacy.
-    
-    match provider_name.as_str() {
-        "antigravity" => {
-            let client = antigravity::AntigravityClient::from_env().await?;
-            let agent = client.agent("gemini-2.5-flash").preamble(&preamble).build();
-            run_rich_loop(tui, agent, &persistence, &session_id).await
-        }
-        _ => {
-            let client = get_openai_like_client(&provider_name, &config)?;
-            let model_name = match provider_name.as_str() {
-                "openrouter" => "anthropic/claude-3.5-sonnet",
-                "openai" => "gpt-4-turbo",
-                _ => "gpt-4o",
-            };
-            let agent = client.agent(model_name).preamble(&preamble).build();
-            run_rich_loop(tui, agent, &persistence, &session_id).await
-        }
-    }
+    run_rich_loop(tui, agent_tx, &session_id).await
 }
 
-async fn run_rich_loop<P: Prompt>(
+async fn run_rich_loop(
     mut tui: nanobot_cli::ui::tui::TuiManager,
-    agent: P,
-    persistence: &PersistenceManager,
+    agent_tx: tokio::sync::mpsc::Sender<nanobot_core::agent::AgentMessage>,
     session_id: &str,
 ) -> Result<()> {
     loop {
@@ -982,28 +1078,47 @@ async fn run_rich_loop<P: Prompt>(
                 if input.trim() == "/quit" { break; }
                 
                 log::info!("> {}", input);
-                persistence.save_message(session_id, "user", &input).ok();
                 
-                // Prompt Agent (this blocks TUI drawing currently)
-                // TODO: Move to background task for non-blocking UI
-                match agent.prompt(&input).await {
-                    Ok(response) => {
-                        log::info!("Bot: {}", response);
-                        persistence.save_message(session_id, "assistant", &response).ok();
-                        
-                        // Handle tool calls if any (basic support for now)
-                        if tools::executor::is_tool_call(&response) {
-                             log::info!("🔧 Executing tool...");
-                             match tools::executor::execute_tool(&response, None, None, None).await {
-                                Ok(res) => log::info!("✓ Result: {}", res),
-                                Err(e) => log::error!("✗ Error: {}", e),
-                             }
+                // Create response channel for this interaction
+                let (response_tx, mut response_rx) = tokio::sync::mpsc::channel(100);
+                
+                let msg = nanobot_core::agent::AgentMessage {
+                    session_id: session_id.to_string(),
+                    content: input,
+                    response_tx,
+                };
+                
+                if let Err(e) = agent_tx.send(msg).await {
+                    log::error!("Failed to send message to agent: {}", e);
+                    break;
+                }
+                
+                // Collect response and log tool events
+                let mut full_response = String::new();
+                
+                while let Some(chunk) = response_rx.recv().await {
+                    match chunk {
+                        nanobot_core::agent::StreamChunk::TextDelta(text) => {
+                            full_response.push_str(&text);
+                            // Optional: If TUI supported streaming updates to the log, we'd do it here.
+                            // For now, we wait for full response to log clean block, or maybe just log?
+                            // Logging every character is bad. Logging lines?
+                            // Let's just accumulate and log at end for text, but log tool events immediately.
                         }
-                    }
-                    Err(e) => {
-                        log::error!("Error parsing response: {}", e);
+                        nanobot_core::agent::StreamChunk::ToolCall(name) => {
+                            log::info!("🔧 Tool: {}", name);
+                        }
+                        nanobot_core::agent::StreamChunk::ToolResult(res) => {
+                            // Truncate result for logs if too long
+                            let display_res: String = res.chars().take(100).collect();
+                            let suffix = if res.len() > 100 { "..." } else { "" };
+                            log::info!("✓ Result: {}{}", display_res, suffix);
+                        }
+                        nanobot_core::agent::StreamChunk::Done => break,
                     }
                 }
+                
+                log::info!("Bot: {}", full_response);
             }
             None => break, // Quit
         }
@@ -1013,50 +1128,54 @@ async fn run_rich_loop<P: Prompt>(
     Ok(())
 }
 async fn run_cli_agent(message: &str, provider: Option<String>, model: Option<String>) -> Result<()> {
-    let config = config::Config::load()?;
-    let provider_name = provider.unwrap_or(config.default_provider.clone());
-
-    println!("User: {}", message);
-
-    // Init Persistence
-    let db_path = PathBuf::from(".").join(".nanobot").join("sessions.db");
-    if let Some(parent) = db_path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-    }
-    let persistence = PersistenceManager::new(db_path);
-    persistence.init()?;
-    let session_id = Uuid::new_v4().to_string();
-
-    persistence.save_message(&session_id, "user", message).ok();
-
-    match provider_name.as_str() {
-        "antigravity" => {
-            let client = antigravity::AntigravityClient::from_env().await?;
-            let model_name = model.as_deref().unwrap_or("gemini-3-flash");
-            let agent = client
-                .agent(model_name)
-                .preamble("You are a helpful AI assistant called Nanobot.")
-                .build();
-            let response = agent.prompt(message).await.map_err(|e| anyhow::anyhow!("{}", e))?;
-            println!("Nanobot: {}", response);
-            persistence.save_message(&session_id, "assistant", &response).ok();
+    // Initialize AgentLoop (now CLI gets RAG + Cron + Personality!)
+    let agent_loop = nanobot_core::agent::AgentLoop::new().await?;
+    
+    // Create channels
+    let (agent_tx, agent_rx) = tokio::sync::mpsc::channel(100);
+    let (response_tx, mut response_rx) = tokio::sync::mpsc::channel(100);
+    
+    // Spawn AgentLoop
+    tokio::spawn(async move {
+        agent_loop.run(agent_rx).await;
+    });
+    
+    // Send message to AgentLoop
+    let agent_msg = nanobot_core::agent::AgentMessage {
+        session_id: format!("cli:{}", uuid::Uuid::new_v4()),
+        content: message.to_string(),
+        response_tx,
+    };
+    
+    agent_tx.send(agent_msg).await?;
+    
+    // Collect and print streaming response
+    let mut first_chunk = true;
+    while let Some(chunk) = response_rx.recv().await {
+        match chunk {
+            nanobot_core::agent::StreamChunk::TextDelta(text) => {
+                if first_chunk {
+                    print!("\n"); // Add newline before first response
+                    first_chunk = false;
+                }
+                print!("{}", text);
+                std::io::Write::flush(&mut std::io::stdout())?;
+            }
+            nanobot_core::agent::StreamChunk::ToolCall(call) => {
+                eprintln!("\n🔧 Tool: {}", call);
+            }
+            nanobot_core::agent::StreamChunk::ToolResult(result) => {
+                eprintln!("✓ Result: {}", result.chars().take(100).collect::<String>());
+            }
+            nanobot_core::agent::StreamChunk::Done => break,
         }
-        _ => {
-            let client = get_openai_like_client(&provider_name, &config)?;
-             // Use completion_model() -> agent logic if prompt() on client is not direct.
-             // Client implements Prompt? No, agent does.
-            let agent = client
-                .agent("anthropic/claude-3-opus")
-                .preamble("You are a helpful AI assistant called Nanobot.")
-                .build();
-            let response = agent.prompt(message).await.map_err(|e| anyhow::anyhow!("{}", e))?;
-            println!("Nanobot: {}", response);
-            persistence.save_message(&session_id, "assistant", &response).ok();
-        }
     }
-
+    
+    println!("\n"); // Final newline
     Ok(())
 }
+
+
 
 async fn run_oauth_login(provider: &str) -> Result<()> {
     println!("🔐 Starting OAuth login for: {}", provider);
@@ -1223,31 +1342,37 @@ async fn run_telegram_gateway() -> Result<()> {
         allowed_users,
     };
 
-    // Create channels for communication
-    let (agent_tx, telegram_rx) = tokio::sync::mpsc::channel(100);
-    let (response_tx, response_rx) = tokio::sync::mpsc::channel(100);
+    // Initialize AgentLoop (now Telegram gets RAG + Cron + Personality!)
+    println!("🧠 Initializing AgentLoop with full features...");
+    let agent_loop = nanobot_core::agent::AgentLoop::new().await?;
+    
+    // Create channel for AgentMessages
+    let (agent_tx, agent_rx) = tokio::sync::mpsc::channel(100);
 
-    // Create Telegram bot
-    let bot = telegram::TelegramBot::new(telegram_config, agent_tx, response_rx);
+    // Initialize Gateway Registry
+    let registry = std::sync::Arc::new(nanobot_core::gateway::registry::ChannelRegistry::new());
 
-    // Create simple agent
-    let agent = telegram::SimpleAgent::new(telegram_rx, response_tx);
+    // Spawn AgentLoop
+    tokio::spawn(async move {
+        println!("🤖 AgentLoop started for Telegram");
+        agent_loop.run(agent_rx).await;
+    });
 
-    println!("✅ Telegram bot started!");
-    println!("📱 Send a message to your bot to test it\n");
+    // Create Telegram bot (now sends to AgentLoop AND listens to Registry)
+    let bot = telegram::TelegramBot::new(telegram_config, agent_tx, registry.clone());
 
-    // Run both concurrently
+    println!("✅ Telegram bot started with AgentLoop + Actor Registry!");
+    println!("📱 Features enabled: RAG, Cron, Personality, Tool Loop, Bidirectional Messaging\n");
+
+    // Run bot (Dual-task architecture for robust Actor behavior)
     tokio::select! {
         result = bot.run() => {
             if let Err(e) = result {
                 eprintln!("❌ Telegram bot error: {}", e);
             }
         }
-        _ = agent.run() => {
-            println!("Agent loop stopped");
-        }
         _ = tokio::signal::ctrl_c() => {
-            println!("\n👋 Shutting down gracefully...");
+            println!("🛑 Shutting down...");
         }
     }
 

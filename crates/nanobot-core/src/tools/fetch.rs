@@ -56,13 +56,13 @@ pub async fn web_fetch(args: WebFetchArgs) -> Result<String> {
 
         // Remove noise
         let _noise_selector =
-            Selector::parse("script, style, nav, footer, iframe, svg, noscript").unwrap();
+            Selector::parse("script, style, nav, footer, iframe, svg, noscript").expect("Valid CSS selector");
         // Note: Scraper doesn't support easy removal.
         // Strategy: Select ALL text nodes, filter if they are children of noise tags?
         // Easier: Use a crate like `readability` or heuristic.
         // For now, heuristic: Select p, h1-h6, li, pre, code.
 
-        let content_selector = Selector::parse("body p, body h1, body h2, body h3, body h4, body li, body pre, body code, body article").unwrap();
+        let content_selector = Selector::parse("body p, body h1, body h2, body h3, body h4, body li, body pre, body code, body article").expect("Valid CSS selector");
 
         let mut text_parts = Vec::new();
 

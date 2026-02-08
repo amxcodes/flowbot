@@ -1,0 +1,85 @@
+# Example Nanobot Configuration
+# Copy this to config.toml and fill in your API keys
+
+default_provider = "anthropic"  # Options: anthropic, openai, google, groq, perplexity, deepseek, openrouter, antigravity
+
+# Provider configurations
+[providers.anthropic]
+api_key = "sk-ant-your-key-here"
+model = "claude-opus-4-6"  # Optional: defaults to claude-opus-4-6
+
+[providers.openai]
+api_key = "sk-your-key-here"
+model = "gpt-5-2"  # Optional: defaults to gpt-5-2
+
+[providers.google]
+api_key = "AIzaSy-your-key-here"
+model = "gemini-3-pro"  # Optional: defaults to gemini-3-pro
+
+[providers.groq]
+api_key = "gsk_your-key-here"
+model = "llama-3.3-70b-versatile"  # Optional
+
+[providers.perplexity]
+api_key = "pplx-your-key-here"
+model = "llama-3.1-sonar-large-128k-online"  # Optional
+
+[providers.deepseek]
+api_key = "sk-your-key-here"
+model = "deepseek-chat"  # Optional
+
+[providers.openrouter]
+api_key = "sk-or-your-key-here"
+model = "anthropic/claude-opus-4-6"  # Optional
+
+[providers.antigravity]
+api_key = "your-key-here"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"  # Optional
+
+# Telegram configuration
+[providers.telegram]
+bot_token = "your-bot-token-here"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# LLM Multi-Provider Failover Configuration (NEW)
+# ═══════════════════════════════════════════════════════════════════════════
+# Enables automatic failover between LLM providers with configurable priority
+# Uncomment to enable this feature
+
+# [llm]
+# max_retries = 3
+# retry_delay_ms = 1000
+# # Priority order for failover (first to last)
+# failover_chain = ["antigravity", "openai"]
+#
+# [llm.antigravity]
+# enabled = true
+# api_key = "your-google-ai-studio-key"
+# model = "gemini-2.0-flash-001"
+# base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+#
+# [llm.openai]
+# enabled = true
+# api_key = "sk-your-openai-key"
+# model = "gpt-4o"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MCP (Model Context Protocol) Configuration (NEW)
+# ═══════════════════════════════════════════════════════════════════════════
+# Connect to external MCP servers for tool discovery
+# Uncomment to enable MCP support
+
+# [mcp]
+# enabled = true
+#
+# [[mcp.servers]]
+# name = "filesystem"
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-filesystem", "C:\\workspace"]
+#
+# [[mcp.servers]]
+# name = "github"
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-github"]
+# [mcp.servers.env]
+# GITHUB_TOKEN = "${GITHUB_TOKEN}"

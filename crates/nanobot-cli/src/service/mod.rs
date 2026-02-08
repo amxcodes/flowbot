@@ -5,4 +5,4 @@ pub mod types;
 pub mod windows;
 
 pub use manager::ServiceManager;
-pub use types::{ServiceRuntime, ServiceStatus, ServiceResponse, ServiceInfo};
+pub use types::{ServiceStatus, ServiceResponse, ServiceInfo};

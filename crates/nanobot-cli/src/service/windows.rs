@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use std::fs;
-use std::path::PathBuf;
 use std::process::Command;
 
 use super::types::{ServiceRuntime, ServiceStatus};

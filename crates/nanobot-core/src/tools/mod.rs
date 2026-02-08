@@ -4,8 +4,18 @@ pub mod cli_wrapper;
 pub mod commands;
 pub mod cron;
 pub mod definitions;
+pub mod permissions;
+pub mod confirmation;
+pub mod cli_confirmation;
+pub mod telegram_confirmation;
+pub mod gateway_confirmation;
 pub mod docker;
+pub mod docker_executor;
 pub mod executor;
+pub mod guard;
+
+pub use permissions::{PermissionManager, SecurityProfile, PermissionDecision, Operation};
+pub use confirmation::{ConfirmationRequest, ConfirmationResponse, ConfirmationService, ConfirmationAdapter, RiskLevel};
 pub mod fetch;
 pub mod filesystem;
 pub mod list_directory_tool;
@@ -18,6 +28,13 @@ pub mod subagent_tools;
 pub mod web_search_tool;
 pub mod websearch;
 pub mod write_file_tool;
+pub mod edit_file_tool;
+pub mod spawn_process_tool;
+pub mod read_process_output_tool;
+pub mod kill_process_tool;
+pub mod web_fetch_tool;
+pub mod write_process_input_tool;
+pub mod script_eval_tool;
 
 use anyhow::Result;
 

@@ -42,10 +42,10 @@ pub async fn web_search(args: WebSearchArgs) -> Result<Vec<SearchResult>> {
     use scraper::{Html, Selector};
 
     let document = Html::parse_document(&html);
-    let result_selector = Selector::parse(".result").unwrap();
-    let title_selector = Selector::parse(".result__a").unwrap();
-    let snippet_selector = Selector::parse(".result__snippet").unwrap();
-    let url_selector = Selector::parse(".result__url").unwrap();
+    let result_selector = Selector::parse(".result").expect("Valid CSS selector");
+    let title_selector = Selector::parse(".result__a").expect("Valid CSS selector");
+    let snippet_selector = Selector::parse(".result__snippet").expect("Valid CSS selector");
+    let url_selector = Selector::parse(".result__url").expect("Valid CSS selector");
 
     let mut results = Vec::new();
 

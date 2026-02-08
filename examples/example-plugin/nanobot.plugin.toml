@@ -1,0 +1,139 @@
+# Example Plugin Manifest
+
+This is an example plugin showing how to create a `nanobot.plugin.toml` manifest.
+
+## Directory Structure
+
+```
+~/.config/nanobot/plugins/my-plugin/
+├── nanobot.plugin.toml    # Manifest file
+├── README.md              # Plugin documentation
+└── tools.wasm             # (Optional) WASM tools
+```
+
+## Manifest File
+
+**nanobot.plugin.toml**:
+
+```toml
+[plugin]
+id = "github-advanced"
+name = "GitHub Advanced Tools"
+version = "1.2.0"
+description = "Extended GitHub integration with PR review and CI/CD tools"
+author = "Nanobot Community"
+
+# Tool declarations
+[[tools]]
+name = "github_pr_review"
+enabled = true
+requires = ["GITHUB_TOKEN"]
+
+[tools.policy]
+rate_limit = 30  # Max 30 calls per minute
+requires_approval = false
+
+[[tools]]
+name = "github_ci_status"
+enabled = true
+requires = ["GITHUB_TOKEN"]
+
+[[tools]]
+name = "github_merge_pr"
+enabled = false  # Disabled by default (dangerous operation)
+requires = ["GITHUB_TOKEN"]
+
+[tools.policy]
+rate_limit = 10
+requires_approval = true  # User must approve before execution
+
+# Hook declarations
+[[hooks]]
+event = "on_tool_execute"
+handler = "log_github_calls"
+
+[[hooks]]
+event = "on_tool_error"
+handler = "notify_github_error"
+
+# Plugin configuration
+[config.env]
+GITHUB_API_VERSION = "2022-11-28"
+GITHUB_BASE_URL = "https://api.github.com"
+```
+
+## Field Reference
+
+### `[plugin]` Section
+
+| Field | Required | Description |
+|---|---|---|
+| `id` | ✅ | Unique plugin identifier (kebab-case) |
+| `name` | ✅ | Human-readable plugin name |
+| `version` | ✅ | Semantic version (e.g., "1.0.0") |
+| `description` | | Short description of plugin functionality |
+| `author` | | Plugin author name or organization |
+
+### `[[tools]]` Section
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | ✅ | Tool name (must match registered tool) |
+| `enabled` | | Enable/disable tool (default: true) |
+| `requires` | | List of required environment variables |
+| `policy.rate_limit` | | Max calls per minute |
+| `policy.requires_approval` | | User approval required (default: false) |
+
+### `[[hooks]]` Section
+
+| Field | Required | Description |
+|---|---|---|
+| `event` | ✅ | Hook event name (see events below) |
+| `handler` | ✅ | Handler function name |
+
+**Valid Events**:
+- `on_startup`
+- `on_session_start`
+- `on_session_end`
+- `on_message`
+- `on_response`
+- `on_tool_execute`
+- `on_tool_complete`
+- `on_tool_error`
+- `on_error`
+
+### `[config]` Section
+
+| Field | Required | Description |
+|---|---|---|
+| `env` | | Environment variables for plugin |
+
+## Usage
+
+1. **Create plugin directory**:
+   ```bash
+   mkdir -p ~/.config/nanobot/plugins/my-plugin
+   ```
+
+2. **Create manifest**:
+   ```bash
+   cd ~/.config/nanobot/plugins/my-plugin
+   vim nanobot.plugin.toml
+   ```
+
+3. **List plugins**:
+   ```bash
+   nanobot plugin list
+   ```
+
+4. **Reload plugins**:
+   ```bash
+   nanobot plugin reload
+   ```
+
+## Notes
+
+- Manifests are auto-discovered from `~/.config/nanobot/plugins/*/nanobot.plugin.toml`
+- Tool names must match tools registered in the ToolRegistry
+- Hooks require handler functions to be defined in plugin code
+- Environment variables from `config.env` are loaded when plugin initializes
