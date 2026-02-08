@@ -1,22 +1,17 @@
-﻿cargo :     Checking 
-nanobot-core v0.1.0 
-(C:\Users\AMAN ANU\Desktop\amxcod
-es\nanobot\nanobot-rs-clean\crate
-s\nanobot-core)
+﻿cargo : warning: unused import: 
+`std::sync::Arc`
 At line:1 char:1
 + cargo check -p nanobot-cli 
 2>&1 | Out-File -Encoding utf8 
-check_cli.l ...
+check_cli_3 ...
 + ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     + CategoryInfo          : No 
-   tSpecified: (    Checking na  
-  ...s\nanobot-core):String) [   
- ], RemoteException
+   tSpecified: (warning: unused  
+   import: `std::sync::Arc`:St   
+ ring) [], RemoteException
     + FullyQualifiedErrorId : Na 
    tiveCommandError
  
-warning: unused import: 
-`std::sync::Arc`
  --> crates\nanobot-core\src\gate
 way\web_adapter.rs:1:5
   |
@@ -308,27 +303,140 @@ suggestions)
 (C:\Users\AMAN ANU\Desktop\amxcod
 es\nanobot\nanobot-rs-clean\crate
 s\nanobot-cli)
-error: unexpected closing 
-delimiter: `}`
-    --> crates\nanobot-cli\src\ma
-in.rs:1191:1
-     |
-1166 |     while let Some(chunk) 
-= response_rx.recv().await {
-     |                           
-                           - 
-this delimiter might not be 
-properly closed...
-...
-1186 |         }
-     |         - ...as it 
-matches this but it has 
-different indentation
-...
-1191 | }
-     | ^ unexpected closing 
-delimiter
+warning: unused import: 
+`CompletionClient`
+ --> crates\nanobot-cli\src\main.
+rs:3:35
+  |
+3 | use 
+rig::client::{ProviderClient, 
+CompletionClient};
+  |                              
+     ^^^^^^^^^^^^^^^^
+  |
+  = note: 
+`#[warn(unused_imports)]` on by 
+default
 
-error: could not compile 
-`nanobot-cli` (bin "nanobot") 
-due to 1 previous error
+warning: unused import: 
+`rig::completion::Prompt`
+ --> crates\nanobot-cli\src\main.
+rs:4:5
+  |
+4 | use rig::completion::Prompt;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: 
+`agent`, `antigravity`, and 
+`tools`
+  --> crates\nanobot-cli\src\main
+.rs:12:5
+   |
+12 |     agent,
+   |     ^^^^^
+13 |     AgentLoop, // 
+Re-exported at root
+14 |     config, oauth, doctor, 
+tools, antigravity, gateway, 
+security,
+   |                            
+^^^^^  ^^^^^^^^^^^
+
+warning: unused imports: 
+`IntoResponse`, `Response`, and 
+`header`
+ --> crates\nanobot-cli\src\web\m
+od.rs:3:24
+  |
+3 |     http::{StatusCode, 
+header},
+  |                        ^^^^^^
+4 |     response::{IntoResponse, 
+Response, Html},
+  |                ^^^^^^^^^^^^  
+^^^^^^^^
+
+warning: unused variable: 
+`provider`
+    --> crates\nanobot-cli\src\ma
+in.rs:1037:28
+     |
+1037 | async fn 
+run_rich_tui_chat(provider: 
+Option<String>) -> Result<()> {
+     |                           
+ ^^^^^^^^ help: if this is 
+intentional, prefix it with an 
+underscore: `_provider`
+     |
+     = note: 
+`#[warn(unused_variables)]` on 
+by default
+
+warning: unused variable: 
+`provider`
+    --> crates\nanobot-cli\src\ma
+in.rs:1142:39
+     |
+1142 | async fn 
+run_cli_agent(message: &str, 
+provider: Option<String>, model: 
+Option<String>) -> Result<()> {
+     |                           
+            ^^^^^^^^ help: if 
+this is intentional, prefix it 
+with an underscore: `_provider`
+
+warning: unused variable: `model`
+    --> crates\nanobot-cli\src\ma
+in.rs:1142:65
+     |
+1142 | async fn 
+run_cli_agent(message: &str, 
+provider: Option<String>, model: 
+Option<String>) -> Result<()> {
+     |                           
+                                 
+     ^^^^^ help: if this is 
+intentional, prefix it with an 
+underscore: `_model`
+
+warning: variable does not need 
+to be mutable
+   --> crates\nanobot-cli\src\mai
+n.rs:786:17
+    |
+786 |             let mut agent 
+= AgentLoop::new().await?;
+    |                 ----^^^^^
+    |                 |
+    |                 help: 
+remove this `mut`
+    |
+    = note: 
+`#[warn(unused_mut)]` on by 
+default
+
+warning: function 
+`get_openai_like_client` is 
+never used
+    --> crates\nanobot-cli\src\ma
+in.rs:1223:4
+     |
+1223 | fn get_openai_like_client(
+provider_name: &str, config: 
+&config::Config) -> 
+Result<openai::Client> {
+     |    ^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: 
+`#[warn(dead_code)]` on by 
+default
+
+warning: `nanobot-cli` (bin 
+"nanobot") generated 9 warnings 
+(run `cargo fix --bin "nanobot"` 
+to apply 5 suggestions)
+    Finished `dev` profile 
+[unoptimized + debuginfo] 
+target(s) in 3.25s

@@ -61,7 +61,7 @@ impl DataMigrator {
         let mut parent_id: Option<i64> = None;
 
         for (role, content) in messages {
-            let stmt_str = if let Some(pid) = parent_id {
+            let stmt_str = if let Some(_pid) = parent_id {
                 "INSERT INTO context_tree (session_id, role, content, parent_id) 
                  VALUES (?1, ?2, ?3, ?4)"
             } else {

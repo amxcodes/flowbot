@@ -46,7 +46,7 @@ impl SecretManager {
     pub fn encrypt(&self, plaintext: &str) -> Result<String> {
         // Generate random nonce
         let mut nonce_bytes = [0u8; NONCE_SIZE];
-        rand::thread_rng().fill_bytes(&mut nonce_bytes);
+        rand::rng().fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         // Encrypt
@@ -90,7 +90,7 @@ impl SecretManager {
 
     pub fn generate_salt() -> [u8; SALT_SIZE] {
         let mut salt = [0u8; SALT_SIZE];
-        rand::thread_rng().fill_bytes(&mut salt);
+        rand::rng().fill_bytes(&mut salt);
         salt
     }
 

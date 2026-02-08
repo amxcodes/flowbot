@@ -18,6 +18,7 @@ pub struct DiscordConfig {
 
 /// Discord message event from Gateway
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct DiscordMessage {
     id: String,
     channel_id: String,
@@ -26,6 +27,7 @@ struct DiscordMessage {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct DiscordUser {
     id: String,
     username: String,
@@ -35,6 +37,7 @@ struct DiscordUser {
 /// Discord bot instance using Gateway Registry pattern
 pub struct DiscordBot {
     config: DiscordConfig,
+    #[allow(dead_code)]
     agent_tx: mpsc::Sender<crate::agent::AgentMessage>,
     registry: Arc<ChannelRegistry>,
     http_client: reqwest::Client,
@@ -96,6 +99,7 @@ impl DiscordBot {
     }
 
     /// Handle incoming Discord message
+    #[allow(dead_code)]
     async fn handle_message(&self, msg: DiscordMessage) -> Result<()> {
         // Skip bot messages
         if msg.author.bot.unwrap_or(false) {
@@ -136,6 +140,7 @@ impl DiscordBot {
         let (response_tx, mut response_rx) = mpsc::channel(100);
         let agent_msg = crate::agent::AgentMessage {
             session_id: format!("discord:{}", channel_id),
+            tenant_id: format!("discord:{}", channel_id), // Use Channel ID as Tenant ID
             content: text,
             response_tx,
         };

@@ -40,7 +40,7 @@ impl AntigravityClient {
             .and_then(|cfg| cfg.providers.antigravity.clone());
 
         let api_key = provider_config.as_ref().and_then(|provider| {
-            let key = provider.api_key.trim().to_string();
+            let key = provider.api_key.as_deref().unwrap_or("").trim().to_string();
             if key.is_empty() { None } else { Some(key) }
         });
 

@@ -50,7 +50,7 @@ impl ResourceMonitor {
     }
 
     pub fn get_usage(&self) -> ResourceUsage {
-        let mut sys = self.system.lock().unwrap();
+        let sys = self.system.lock().unwrap();
         // Refresh called periodically, but we can also force refresh here if needed
         // sys.refresh_cpu(); // Blocking call
         

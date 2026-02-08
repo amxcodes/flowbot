@@ -57,7 +57,7 @@ You have access to the following tools:
 
     #[cfg(feature = "browser")]
     {
-        s.push_str(r#"
+        s.push_str(r##"
 14. **browser_navigate** - Navigate to a URL in the browser
     Usage: { "tool": "browser_navigate", "url": "https://example.com" }
 
@@ -83,7 +83,7 @@ You have access to the following tools:
 
 21. **browser_switch_tab** - Switch to a specific tab
     Usage: { "tool": "browser_switch_tab", "index": 0 }
-"#);
+"##);
     }
 
     s.push_str("\nWhen you need to use a tool, respond with ONLY the JSON tool call on a single line.\n\nAfter I execute the tool and show you the result, continue the conversation normally.\n");
@@ -101,6 +101,7 @@ pub async fn execute_tool(
     skill_loader: Option<&std::sync::Arc<tokio::sync::Mutex<crate::skills::SkillLoader>>>,
     #[cfg(feature = "browser")]
     browser_client: Option<&crate::browser::BrowserClient>,
+    tenant_id: Option<&str>,
 ) -> Result<String> {
     // Strip prefix if present (optional support)
     let json_str = tool_input.trim().trim_start_matches("__TOOL_CALL__").trim();
@@ -357,7 +358,7 @@ pub async fn execute_tool(
 
             match memory_manager {
                 Some(manager) => {
-                    let results = manager.search(query, 5).await?;
+                    let results = manager.search(query, 5, tenant_id).await?;
                     let mut response = String::new();
                     for (score, entry) in results {
                         response.push_str(&format!("[Score: {:.2}] {}\n", score, entry.content));
@@ -380,7 +381,7 @@ pub async fn execute_tool(
             match memory_manager {
                 Some(manager) => {
                     manager
-                        .add_document(content, std::collections::HashMap::new())
+                        .add_document(content, std::collections::HashMap::new(), tenant_id)
                         .await?;
                     Ok("Memory saved.".to_string())
                 }
@@ -539,9 +540,9 @@ mod tests {
         let json = r#"{"tool": "run_command", "command": "cargo", "args": ["--version"]}"#;
         // Pass None for all optional context parameters
         #[cfg(feature = "browser")]
-        let result = execute_tool(json, None, None, None, None, None, None).await;
+        let result = execute_tool(json, None, None, None, None, None, None, None).await;
         #[cfg(not(feature = "browser"))]
-        let result = execute_tool(json, None, None, None, None, None).await;
+        let result = execute_tool(json, None, None, None, None, None, None).await;
 
         assert!(result.is_ok());
         let output = result.unwrap();

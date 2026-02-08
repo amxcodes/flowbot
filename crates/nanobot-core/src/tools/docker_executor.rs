@@ -10,37 +10,76 @@ pub fn is_docker_available() -> bool {
         .unwrap_or(false)
 }
 
+pub struct SandboxConfig {
+    pub image: String,
+    pub allow_network: bool,
+    pub writable_workspace: bool,
+    pub workdir: Option<String>,
+    pub env_vars: Vec<(String, String)>,
+}
+
+impl Default for SandboxConfig {
+    fn default() -> Self {
+        Self {
+            image: "alpine:latest".to_string(),
+            allow_network: false,
+            writable_workspace: false,
+            workdir: Some("/workspace".to_string()),
+            env_vars: Vec::new(),
+        }
+    }
+}
+
 /// Execute a command in a Docker container
 pub async fn execute_in_container(
     command: &str,
     args: &[String],
-    working_dir: Option<&str>,
+    config: &SandboxConfig,
 ) -> Result<String> {
     let current_dir = std::env::current_dir()?;
     let mount_path = current_dir.to_str().ok_or_else(|| {
         anyhow::anyhow!("Invalid current directory path")
     })?;
 
-    // Build the command to execute inside container
-    let mut cmd_parts = vec![command.to_string()];
-    cmd_parts.extend(args.iter().cloned());
-    let full_command = cmd_parts.join(" ");
+    // Use a fixed container name or random? Random is better for concurrency.
+    // Docker run --rm handles cleanup.
 
-    // Use Alpine Linux as a lightweight base image
     let mut docker_cmd = Command::new("docker");
-    docker_cmd
-        .arg("run")
-        .arg("--rm") // Remove container after execution
-        .arg("--network=none") // Disable network access for security
-        .arg("--read-only") // Make filesystem read-only
-        .arg("-v")
-        .arg(format!("{}:/workspace:ro", mount_path)) // Mount current dir as read-only
-        .arg("-w")
-        .arg(working_dir.unwrap_or("/workspace")) // Set working directory
-        .arg("alpine:latest") // Use Alpine Linux
-        .arg("sh")
-        .arg("-c")
-        .arg(&full_command);
+    docker_cmd.arg("run");
+    docker_cmd.arg("--rm"); // Remove container after execution
+    
+    // Security flags
+    if !config.allow_network {
+        docker_cmd.arg("--network=none");
+    }
+    
+    // Filesystem flags
+    // We always want root to be read-only if possible, but allow /tmp and /workspace
+    docker_cmd.arg("--read-only");
+    
+    // Mount tmpfs for temp files
+    docker_cmd.arg("--tmpfs").arg("/tmp");
+    
+    // Mount workspace
+    let mount_mode = if config.writable_workspace { "rw" } else { "ro" };
+    docker_cmd.arg("-v").arg(format!("{}:/workspace:{}", mount_path, mount_mode));
+    
+    // Set working directory
+    if let Some(wd) = &config.workdir {
+        docker_cmd.arg("-w").arg(wd);
+    }
+
+    // Set Environment Variables
+    for (key, val) in &config.env_vars {
+        docker_cmd.arg("-e").arg(format!("{}={}", key, val));
+    }
+    
+    // Image
+    docker_cmd.arg(&config.image);
+    
+    // Command and Args (DIRECT PASSING - Prevents Shell Injection)
+    docker_cmd.arg(command);
+    docker_cmd.args(args);
 
     // Execute the command
     let output = docker_cmd.output()?;
@@ -49,9 +88,11 @@ pub async fn execute_in_container(
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        // Combine stdout and stderr for better debugging if failed
+        let stdout = String::from_utf8_lossy(&output.stdout);
         Err(anyhow::anyhow!(
-            "Docker execution failed: {}",
-            stderr
+            "Docker execution failed.\nStderr: {}\nStdout: {}",
+            stderr, stdout
         ))
     }
 }

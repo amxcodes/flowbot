@@ -18,6 +18,7 @@ pub struct SlackConfig {
 
 /// Slack message event from Events API
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct SlackEventWrapper {
     #[serde(rename = "type")]
     event_type: String,
@@ -25,6 +26,7 @@ struct SlackEventWrapper {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct SlackEvent {
     #[serde(rename = "type")]
     event_type: String,
@@ -37,6 +39,7 @@ struct SlackEvent {
 /// Slack bot instance using Gateway Registry pattern
 pub struct SlackBot {
     config: SlackConfig,
+    #[allow(dead_code)]
     agent_tx: mpsc::Sender<crate::agent::AgentMessage>,
     registry: Arc<ChannelRegistry>,
     http_client: reqwest::Client,
@@ -80,6 +83,7 @@ impl SlackBot {
     }
 
     /// Handle incoming Slack event
+    #[allow(dead_code)]
     async fn handle_event(&self, event: SlackEvent) -> Result<()> {
         // Skip bot messages
         if event.bot_id.is_some() {
@@ -119,6 +123,7 @@ impl SlackBot {
         let (response_tx, mut response_rx) = mpsc::channel(100);
         let agent_msg = crate::agent::AgentMessage {
             session_id: format!("slack:{}", channel_id),
+            tenant_id: format!("slack:{}", channel_id), // Use Channel ID as Tenant ID
             content: text,
             response_tx,
         };

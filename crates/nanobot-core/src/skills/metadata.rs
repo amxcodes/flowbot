@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+// use std::collections::HashMap;
 
 /// Metadata for a skill, parsed from SKILL.md
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,7 +66,7 @@ impl SkillMetadata {
         let mut status = String::from("active");
         let mut author = None;
         let mut tools = Vec::new();
-        let mut dependencies = Vec::new();
+        let dependencies = Vec::new();
         
         // Simple frontmatter parsing (YAML-like)
         if content.starts_with("---") {

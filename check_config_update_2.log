@@ -1,0 +1,301 @@
+﻿cargo :     Checking nanobot-core 
+v0.1.0 (C:\Users\AMAN ANU\Desktop\am
+xcodes\nanobot\nanobot-rs-clean\crat
+es\nanobot-core)
+At line:1 char:1
++ cargo check -p nanobot-core 2>&1 
+| Out-File -Encoding utf8 
+check_conf ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSp 
+   ecified: (    Checking na...s\n  
+  anobot-core):String) [], Remote   
+ Exception
+    + FullyQualifiedErrorId : Nativ 
+   eCommandError
+ 
+warning: unused import: 
+`std::sync::Arc`
+ --> crates\nanobot-core\src\gateway
+\web_adapter.rs:1:5
+  |
+1 | use std::sync::Arc;
+  |     ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` 
+on by default
+
+warning: unused import: 
+`ChannelMessage`
+ --> crates\nanobot-core\src\gateway
+\web_adapter.rs:9:38
+  |
+9 | use 
+super::adapter::{ChannelAdapter, 
+ChannelMessage};
+  |                                 
+     ^^^^^^^^^^^^^^
+
+warning: unused import: 
+`std::collections::HashMap`
+ --> crates\nanobot-core\src\skills\
+metadata.rs:2:5
+  |
+2 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: 
+`TracerProvider`
+ --> crates\nanobot-core\src\observa
+bility.rs:3:40
+  |
+3 | use 
+opentelemetry_sdk::trace::{Tracer, 
+TracerProvider};
+  |                                 
+       ^^^^^^^^^^^^^^
+
+warning: use of deprecated function 
+`rand::thread_rng`: Renamed to `rng`
+  --> crates\nanobot-core\src\securi
+ty\secrets.rs:49:15
+   |
+49 |         
+rand::thread_rng().fill_bytes(&mut 
+nonce_bytes);
+   |               ^^^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on 
+by default
+
+warning: use of deprecated function 
+`rand::thread_rng`: Renamed to `rng`
+  --> crates\nanobot-core\src\securi
+ty\secrets.rs:93:15
+   |
+93 |         
+rand::thread_rng().fill_bytes(&mut 
+salt);
+   |               ^^^^^^^^^^
+
+warning: unused variable: `root`
+  --> crates\nanobot-core\src\memory
+\watcher.rs:89:28
+   |
+89 | fn is_ignored(path: &Path, 
+root: &Path) -> bool {
+   |                            
+^^^^ help: if this is intentional, 
+prefix it with an underscore: 
+`_root`
+   |
+   = note: 
+`#[warn(unused_variables)]` on by 
+default
+
+warning: unused variable: `pid`
+  --> crates\nanobot-core\src\contex
+t\migration.rs:64:40
+   |
+64 |             let stmt_str = if 
+let Some(pid) = parent_id {
+   |                                
+        ^^^ help: if this is 
+intentional, prefix it with an 
+underscore: `_pid`
+
+warning: variable does not need to 
+be mutable
+  --> crates\nanobot-core\src\skills
+\metadata.rs:69:13
+   |
+69 |         let mut dependencies = 
+Vec::new();
+   |             ----^^^^^^^^^^^^
+   |             |
+   |             help: remove this 
+`mut`
+   |
+   = note: `#[warn(unused_mut)]` on 
+by default
+
+warning: variable does not need to 
+be mutable
+  --> crates\nanobot-core\src\system
+\resources.rs:53:13
+   |
+53 |         let mut sys = 
+self.system.lock().unwrap();
+   |             ----^^^
+   |             |
+   |             help: remove this 
+`mut`
+
+warning: type `CallbackResponse` is 
+more private than the item 
+`TelegramConfirmationAdapter::new`
+  --> crates\nanobot-core\src\tools\
+telegram_confirmation.rs:25:5
+   |
+25 | /     pub fn new(
+26 | |         bot_token: String,
+27 | |         chat_id: i64,
+28 | |         callback_rx: 
+mpsc::Receiver<CallbackResponse>,
+29 | |         pending_tx: 
+mpsc::Sender<String>,
+30 | |     ) -> Self {
+   | |_____________^ associated 
+function 
+`TelegramConfirmationAdapter::new` 
+is reachable at visibility `pub`
+   |
+note: but type `CallbackResponse` 
+is only usable at visibility 
+`pub(self)`
+  --> crates\nanobot-core\src\tools\
+telegram_confirmation.rs:19:1
+   |
+19 | struct CallbackResponse {
+   | ^^^^^^^^^^^^^^^^^^^^^^^
+   = note: 
+`#[warn(private_interfaces)]` on by 
+default
+
+warning: type `CallbackResponse` is 
+more private than the item 
+`handle_telegram_callback`
+   --> crates\nanobot-core\src\tools
+\telegram_confirmation.rs:151:1
+    |
+151 | / pub async fn 
+handle_telegram_callback(
+152 | |     callback_data: &str,
+153 | |     pending_tx: 
+&mpsc::Sender<CallbackResponse>,
+154 | | ) -> Result<()> {
+    | |_______________^ function 
+`handle_telegram_callback` is 
+reachable at visibility `pub`
+    |
+note: but type `CallbackResponse` 
+is only usable at visibility 
+`pub(self)`
+   --> crates\nanobot-core\src\tools
+\telegram_confirmation.rs:19:1
+    |
+ 19 | struct CallbackResponse {
+    | ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: fields `mcp_manager` and 
+`workspace_watcher` are never read
+   --> crates\nanobot-core\src\agent
+\mod.rs:141:5
+    |
+132 | pub struct AgentLoop {
+    |            --------- fields 
+in this struct
+...
+141 |     mcp_manager: Option<std::s
+ync::Arc<crate::mcp::McpManager>>,
+    |     ^^^^^^^^^^^
+142 |     workspace_watcher: Option<
+crate::memory::WorkspaceWatcher>,
+    |     ^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` on 
+by default
+
+warning: struct `SlackEventWrapper` 
+is never constructed
+  --> crates\nanobot-core\src\gatewa
+y\slack_adapter.rs:21:8
+   |
+21 | struct SlackEventWrapper {
+   |        ^^^^^^^^^^^^^^^^^
+
+warning: struct `SlackEvent` is 
+never constructed
+  --> crates\nanobot-core\src\gatewa
+y\slack_adapter.rs:28:8
+   |
+28 | struct SlackEvent {
+   |        ^^^^^^^^^^
+
+warning: field `agent_tx` is never 
+read
+  --> crates\nanobot-core\src\gatewa
+y\slack_adapter.rs:40:5
+   |
+38 | pub struct SlackBot {
+   |            -------- field in 
+this struct
+39 |     config: SlackConfig,
+40 |     agent_tx: mpsc::Sender<crat
+e::agent::AgentMessage>,
+   |     ^^^^^^^^
+
+warning: method `handle_event` is 
+never used
+  --> crates\nanobot-core\src\gatewa
+y\slack_adapter.rs:83:14
+   |
+45 | impl SlackBot {
+   | ------------- method in this 
+implementation
+...
+83 |     async fn 
+handle_event(&self, event: 
+SlackEvent) -> Result<()> {
+   |              ^^^^^^^^^^^^
+
+warning: struct `DiscordMessage` is 
+never constructed
+  --> crates\nanobot-core\src\gatewa
+y\discord_adapter.rs:21:8
+   |
+21 | struct DiscordMessage {
+   |        ^^^^^^^^^^^^^^
+
+warning: struct `DiscordUser` is 
+never constructed
+  --> crates\nanobot-core\src\gatewa
+y\discord_adapter.rs:29:8
+   |
+29 | struct DiscordUser {
+   |        ^^^^^^^^^^^
+
+warning: field `agent_tx` is never 
+read
+  --> crates\nanobot-core\src\gatewa
+y\discord_adapter.rs:38:5
+   |
+36 | pub struct DiscordBot {
+   |            ---------- field in 
+this struct
+37 |     config: DiscordConfig,
+38 |     agent_tx: mpsc::Sender<crat
+e::agent::AgentMessage>,
+   |     ^^^^^^^^
+
+warning: method `handle_message` is 
+never used
+  --> crates\nanobot-core\src\gatewa
+y\discord_adapter.rs:99:14
+   |
+43 | impl DiscordBot {
+   | --------------- method in this 
+implementation
+...
+99 |     async fn 
+handle_message(&self, msg: 
+DiscordMessage) -> Result<()> {
+   |              ^^^^^^^^^^^^^^
+
+warning: `nanobot-core` (lib) 
+generated 21 warnings (run `cargo 
+fix --lib -p nanobot-core` to apply 
+6 suggestions)
+    Finished `dev` profile 
+[unoptimized + debuginfo] target(s) 
+in 6.80s

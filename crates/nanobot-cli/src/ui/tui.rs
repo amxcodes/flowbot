@@ -162,35 +162,8 @@ impl TuiManager {
                         self.input_history.push(input.clone());
                         self.history_index = self.input_history.len();
 
-                        // Check for local shell command (bang command)
-                        if input.trim().starts_with("!") {
-                            let cmd_line = input.trim().trim_start_matches('!').trim();
-                            if !cmd_line.is_empty() {
-                                // Execute command
-                                // Note: This bypasses the agent loop and SafeTool policy for now
-                                // In a real implementation this should use SafeTool
-                                match std::process::Command::new("cmd")
-                                    .args(["/C", cmd_line])
-                                    .output()
-                                {
-                                    Ok(output) => {
-                                        let stdout = String::from_utf8_lossy(&output.stdout);
-                                        let stderr = String::from_utf8_lossy(&output.stderr);
-                                        if !stdout.is_empty() {
-                                            log::info!("$ {}\n{}", cmd_line, stdout.trim());
-                                        }
-                                        if !stderr.is_empty() {
-                                            log::error!("$ {}\n{}", cmd_line, stderr.trim());
-                                        }
-                                    }
-                                    Err(e) => {
-                                        log::error!("Failed to execute '{}': {}", cmd_line, e);
-                                    }
-                                }
-                                // Return None so the agent doesn't see this as a prompt
-                                return Ok(None);
-                            }
-                        }
+                        // Check for local shell command (bang command) - REMOVED for security
+                        // if input.trim().starts_with("!") { ... }
                     }
                     return Ok(Some(input));
                 }

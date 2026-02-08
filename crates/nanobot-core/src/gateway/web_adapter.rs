@@ -1,4 +1,4 @@
-use std::sync::Arc;
+// use std::sync::Arc;
 use tokio::sync::mpsc;
 use axum::extract::ws::{Message as WsMessage, WebSocket};
 use futures::{sink::SinkExt, stream::StreamExt};
@@ -6,7 +6,7 @@ use serde_json::json;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use super::adapter::{ChannelAdapter, ChannelMessage};
+use super::adapter::ChannelAdapter;
 use crate::agent::StreamChunk;
 
 /// WebSocket implementation of ChannelAdapter
@@ -98,6 +98,7 @@ impl WebAdapter {
                         if !content.is_empty() {
                             let msg = crate::agent::AgentMessage {
                                 session_id: session_id.clone(),
+                                tenant_id: "default".to_string(), // Web adapter uses default tenant for now
                                 content,
                                 response_tx: response_tx.clone(),
                             };

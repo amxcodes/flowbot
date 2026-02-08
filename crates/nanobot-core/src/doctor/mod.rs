@@ -20,24 +20,31 @@ pub async fn run_doctor() -> Result<()> {
             println!("{}", "✅ OK".green());
 
             // Check Provider Keys
-            if let Some(ref gl) = cfg.providers.antigravity
-                && gl.api_key.is_empty()
-            {
-                println!("  ⚠️  Antigravity API key is empty.");
-                all_ok = false;
+            if let Some(ref gl) = cfg.providers.antigravity {
+                 let no_key = gl.api_key.as_ref().map_or(true, |k| k.is_empty()) 
+                     && gl.api_keys.as_ref().map_or(true, |ks| ks.is_empty());
+                
+                 if no_key {
+                    println!("  ⚠️  Antigravity API key is empty.");
+                    all_ok = false;
+                 }
             }
-            if let Some(ref oa) = cfg.providers.openai
-                && oa.api_key.is_empty()
-            {
-                // Check for tokens
-                if let Ok(tokens) = crate::config::OAuthTokens::load() {
-                    if tokens.get("openai").is_some() {
-                        println!("  ✅ OpenAI (OAuth token found)");
+            
+            if let Some(ref oa) = cfg.providers.openai {
+                let no_key = oa.api_key.as_ref().map_or(true, |k| k.is_empty())
+                     && oa.api_keys.as_ref().map_or(true, |ks| ks.is_empty());
+
+                if no_key {
+                    // Check for tokens
+                    if let Ok(tokens) = crate::config::OAuthTokens::load() {
+                        if tokens.get("openai").is_some() {
+                            println!("  ✅ OpenAI (OAuth token found)");
+                        } else {
+                            println!("  ⚠️  OpenAI key empty and no OAuth token.");
+                        }
                     } else {
-                        println!("  ⚠️  OpenAI key empty and no OAuth token.");
+                        println!("  ⚠️  OpenAI API key is empty.");
                     }
-                } else {
-                    println!("  ⚠️  OpenAI API key is empty.");
                 }
             }
         }

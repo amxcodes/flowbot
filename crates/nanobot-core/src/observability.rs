@@ -1,6 +1,6 @@
 use anyhow::Result;
 use opentelemetry::global;
-use opentelemetry_sdk::trace::{Tracer, TracerProvider};
+use opentelemetry_sdk::trace::Tracer;
 use opentelemetry_sdk::Resource;
 use opentelemetry::KeyValue;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};

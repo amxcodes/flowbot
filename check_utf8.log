@@ -1,0 +1,541 @@
+﻿cargo :     Checking 
+nanobot-core v0.1.0 
+(C:\Users\AMAN ANU\Desktop\amxcod
+es\nanobot\nanobot-rs-clean\crate
+s\nanobot-core)
+At line:1 char:1
++ cargo check -p nanobot-core 
+--features browser > check.log 
+2>&1
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : No 
+   tSpecified: (    Checking na  
+  ...s\nanobot-core):String) [   
+ ], RemoteException
+    + FullyQualifiedErrorId : Na 
+   tiveCommandError
+ 
+error: duplicate serde attribute 
+`default`
+  --> crates\nanobot-core\src\con
+fig\mod.rs:76:13
+   |
+76 |     #[serde(default)]
+   |             ^^^^^^^
+
+warning: unused import: 
+`std::sync::Arc`
+ --> crates\nanobot-core\src\gate
+way\web_adapter.rs:1:5
+  |
+1 | use std::sync::Arc;
+  |     ^^^^^^^^^^^^^^
+  |
+  = note: 
+`#[warn(unused_imports)]` on by 
+default
+
+warning: unused import: 
+`ChannelMessage`
+ --> crates\nanobot-core\src\gate
+way\web_adapter.rs:9:38
+  |
+9 | use 
+super::adapter::{ChannelAdapter, 
+ChannelMessage};
+  |                              
+        ^^^^^^^^^^^^^^
+
+warning: unused import: 
+`std::collections::HashMap`
+ --> crates\nanobot-core\src\skil
+ls\metadata.rs:2:5
+  |
+2 | use 
+std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: 
+`TracerProvider`
+ --> crates\nanobot-core\src\obse
+rvability.rs:3:40
+  |
+3 | use opentelemetry_sdk::trace:
+:{Tracer, TracerProvider};
+  |                              
+          ^^^^^^^^^^^^^^
+
+warning: use of deprecated 
+function `rand::thread_rng`: 
+Renamed to `rng`
+  --> crates\nanobot-core\src\sec
+urity\secrets.rs:49:15
+   |
+49 |         rand::thread_rng().f
+ill_bytes(&mut nonce_bytes);
+   |               ^^^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` 
+on by default
+
+warning: use of deprecated 
+function `rand::thread_rng`: 
+Renamed to `rng`
+  --> crates\nanobot-core\src\sec
+urity\secrets.rs:93:15
+   |
+93 |         rand::thread_rng().f
+ill_bytes(&mut salt);
+   |               ^^^^^^^^^^
+
+error[E0382]: use of partially 
+moved value: `config`
+   --> crates\nanobot-core\src\ag
+ent\mod.rs:451:13
+    |
+443 |         let browser_client 
+= if let Some(browser_config) = 
+config.browser {
+    |                            
+              -------------- 
+value partially moved here
+...
+451 |             config,
+    |             ^^^^^^ value 
+used here after partial move
+    |
+    = note: partial move occurs 
+because value has type 
+`config::BrowserConfig`, which 
+does not implement the `Copy` 
+trait
+help: borrow this binding in the 
+pattern to avoid moving the value
+    |
+443 |         let browser_client 
+= if let Some(ref 
+browser_config) = config.browser 
+{
+    |                            
+              +++
+
+warning: variable does not need 
+to be mutable
+   --> crates\nanobot-core\src\ag
+ent\mod.rs:688:13
+    |
+688 |         let mut 
+total_tokens: usize = chat_histor
+y.iter().map(estimate_message_tok
+ens).sum();
+    |             
+----^^^^^^^^^^^^
+    |             |
+    |             help: remove 
+this `mut`
+    |
+    = note: 
+`#[warn(unused_mut)]` on by 
+default
+
+error[E0308]: mismatched types
+  --> crates\nanobot-core\src\bro
+wser\client.rs:36:23
+   |
+36 |             return 
+Ok(browser.clone());
+   |                    -- 
+^^^^^^^^^^^^^^^ expected 
+`Browser`, found `&Browser`
+   |                    |
+   |                    
+arguments to this enum variant 
+are incorrect
+   |
+note: `chromiumoxide::Browser` 
+does not implement `Clone`, so 
+`&chromiumoxide::Browser` was 
+cloned instead
+  --> crates\nanobot-core\src\bro
+wser\client.rs:36:23
+   |
+36 |             return 
+Ok(browser.clone());
+   |                       
+^^^^^^^
+help: the type constructed 
+contains 
+`&chromiumoxide::Browser` due to 
+the type of the argument passed
+  --> crates\nanobot-core\src\bro
+wser\client.rs:36:20
+   |
+36 |             return 
+Ok(browser.clone());
+   |                    
+^^^---------------^
+   |                       |
+   |                       this 
+argument influences the type of 
+`Ok`
+note: tuple variant defined here
+  --> /rustc/1159e78c4747b02ef996
+e55082b704c09b970588\library\core
+\src\result.rs:552:5
+
+error[E0599]: no method named 
+`clone` found for struct 
+`chromiumoxide::Browser` in the 
+current scope
+   --> crates\nanobot-core\src\br
+owser\client.rs:123:39
+    |
+123 |         *browser_guard = 
+Some(browser.clone());
+    |                            
+           ^^^^^
+    |
+help: there is a method `close` 
+with a similar name
+    |
+123 -         *browser_guard = 
+Some(browser.clone());
+123 +         *browser_guard = 
+Some(browser.close());
+    |
+
+error[E0382]: use of moved 
+value: `session_id`
+   --> crates\nanobot-core\src\ag
+ent\mod.rs:645:26
+    |
+616 |             let session_id 
+= msg.session_id.clone();
+    |                 ---------- 
+move occurs because `session_id` 
+has type `std::string::String`, 
+which does not implement the 
+`Copy` trait
+...
+629 |             let task = 
+tokio::spawn(async move {
+    |                            
+         ---------- value moved 
+here
+...
+640 |                 
+tasks.remove(&session_id);
+    |                            
+   ---------- variable moved due 
+to use in coroutine
+...
+645 |             
+tasks.insert(session_id, 
+task.abort_handle());
+    |                          
+^^^^^^^^^^ value used here after 
+move
+    |
+help: consider cloning the value 
+before moving it into the closure
+    |
+629 ~             let value = 
+session_id.clone();
+630 ~             let task = 
+tokio::spawn(async move {
+631 |                 // Update 
+last interaction tracking
+...
+640 |                 let mut 
+tasks = agent_clone.active_tasks.
+lock().await;
+641 ~                 
+tasks.remove(&value);
+    |
+
+error[E0063]: missing field 
+`tenant_id` in initializer of 
+`AgentMessage`
+   --> crates\nanobot-core\src\ga
+teway\mod.rs:161:35
+    |
+161 |                         
+let msg = AgentMessage {
+    |                            
+       ^^^^^^^^^^^^ missing 
+`tenant_id`
+
+error[E0277]: the trait bound 
+`config::BrowserConfig: 
+serde::Deserialize<'de>` is not 
+satisfied
+    --> crates\nanobot-core\src\c
+onfig\mod.rs:41:18
+     |
+  41 |     pub browser: 
+Option<BrowserConfig>,
+     |                  
+^^^^^^^^^^^^^^^^^^^^^ the trait 
+`Deserialize<'_>` is not 
+implemented for 
+`config::BrowserConfig`
+     |
+     = note: for local types 
+consider adding 
+`#[derive(serde::Deserialize)]` 
+to your `config::BrowserConfig` 
+type
+     = note: for types from 
+other crates check whether the 
+crate offers a `serde` feature 
+flag
+     = help: the following other 
+types implement trait 
+`Deserialize<'de>`:
+               `&'a [u8]` 
+implements `Deserialize<'de>`
+               `&'a 
+serde_json::value::RawValue` 
+implements `Deserialize<'de>`
+               `&'a 
+std::path::Path` implements 
+`Deserialize<'de>`
+               `&'a str` 
+implements `Deserialize<'de>`
+               `()` implements 
+`Deserialize<'de>`
+               `(T,)` implements 
+`Deserialize<'de>`
+               `(T0, T1)` 
+implements `Deserialize<'de>`
+               `(T0, T1, T2)` 
+implements `Deserialize<'de>`
+             and 2898 others
+     = note: required for `std::o
+ption::Option<config::BrowserConf
+ig>` to implement 
+`Deserialize<'_>`
+note: required by a bound in 
+`next_element`
+    --> C:\Users\AMAN ANU\.cargo\
+registry\src\index.crates.io-1949
+cf8c6b5b557f\serde_core-1.0.228\s
+rc\de\mod.rs:1771:12
+     |
+1769 |     fn 
+next_element<T>(&mut self) -> 
+Result<Option<T>, Self::Error>
+     |        ------------ 
+required by a bound in this 
+associated function
+1770 |     where
+1771 |         T: 
+Deserialize<'de>,
+     |            
+^^^^^^^^^^^^^^^^ required by 
+this bound in 
+`SeqAccess::next_element`
+
+error[E0277]: the trait bound 
+`config::BrowserConfig: 
+serde::Deserialize<'de>` is not 
+satisfied
+    --> crates\nanobot-core\src\c
+onfig\mod.rs:41:18
+     |
+  41 |     pub browser: 
+Option<BrowserConfig>,
+     |                  
+^^^^^^^^^^^^^^^^^^^^^ the trait 
+`Deserialize<'_>` is not 
+implemented for 
+`config::BrowserConfig`
+     |
+     = note: for local types 
+consider adding 
+`#[derive(serde::Deserialize)]` 
+to your `config::BrowserConfig` 
+type
+     = note: for types from 
+other crates check whether the 
+crate offers a `serde` feature 
+flag
+     = help: the following other 
+types implement trait 
+`Deserialize<'de>`:
+               `&'a [u8]` 
+implements `Deserialize<'de>`
+               `&'a 
+serde_json::value::RawValue` 
+implements `Deserialize<'de>`
+               `&'a 
+std::path::Path` implements 
+`Deserialize<'de>`
+               `&'a str` 
+implements `Deserialize<'de>`
+               `()` implements 
+`Deserialize<'de>`
+               `(T,)` implements 
+`Deserialize<'de>`
+               `(T0, T1)` 
+implements `Deserialize<'de>`
+               `(T0, T1, T2)` 
+implements `Deserialize<'de>`
+             and 2898 others
+     = note: required for `std::o
+ption::Option<config::BrowserConf
+ig>` to implement 
+`Deserialize<'_>`
+note: required by a bound in 
+`next_value`
+    --> C:\Users\AMAN ANU\.cargo\
+registry\src\index.crates.io-1949
+cf8c6b5b557f\serde_core-1.0.228\s
+rc\de\mod.rs:1916:12
+     |
+1914 |     fn next_value<V>(&mut 
+self) -> Result<V, Self::Error>
+     |        ---------- 
+required by a bound in this 
+associated function
+1915 |     where
+1916 |         V: 
+Deserialize<'de>,
+     |            
+^^^^^^^^^^^^^^^^ required by 
+this bound in 
+`MapAccess::next_value`
+
+error[E0277]: the trait bound 
+`config::BrowserConfig: 
+serde::Serialize` is not 
+satisfied
+    --> crates\nanobot-core\src\c
+onfig\mod.rs:28:37
+     |
+  28 | #[derive(Debug, Clone, 
+Deserialize, Serialize)]
+     |                           
+          ^^^^^^^^^ the trait 
+`Serialize` is not implemented 
+for `config::BrowserConfig`
+...
+  40 |     #[serde(default)]
+     |     - required by a bound 
+introduced by this call
+     |
+     = note: for local types 
+consider adding 
+`#[derive(serde::Serialize)]` to 
+your `config::BrowserConfig` type
+     = note: for types from 
+other crates check whether the 
+crate offers a `serde` feature 
+flag
+     = help: the following other 
+types implement trait 
+`Serialize`:
+               &'a T
+               &'a mut T
+               ()
+               (T,)
+               (T0, T1)
+               (T0, T1, T2)
+               (T0, T1, T2, T3)
+               (T0, T1, T2, T3, 
+T4)
+             and 2951 others
+     = note: required for `std::o
+ption::Option<config::BrowserConf
+ig>` to implement `Serialize`
+note: required by a bound in `ant
+igravity::_::_serde::ser::Seriali
+zeStruct::serialize_field`
+    --> C:\Users\AMAN ANU\.cargo\
+registry\src\index.crates.io-1949
+cf8c6b5b557f\serde_core-1.0.228\s
+rc\ser\mod.rs:1917:21
+     |
+1915 |     fn 
+serialize_field<T>(&mut self, 
+key: &'static str, value: &T) -> 
+Result<(), Self::Error>
+     |        --------------- 
+required by a bound in this 
+associated function
+1916 |     where
+1917 |         T: ?Sized + 
+Serialize;
+     |                     
+^^^^^^^^^ required by this bound 
+in `SerializeStruct::serialize_fi
+eld`
+     = note: this error 
+originates in the derive macro 
+`Serialize` (in Nightly builds, 
+run with -Z macro-backtrace for 
+more info)
+
+warning: unused variable: `root`
+  --> crates\nanobot-core\src\mem
+ory\watcher.rs:93:28
+   |
+93 | fn is_ignored(path: &Path, 
+root: &Path) -> bool {
+   |                            
+^^^^ help: if this is 
+intentional, prefix it with an 
+underscore: `_root`
+   |
+   = note: 
+`#[warn(unused_variables)]` on 
+by default
+
+warning: unused variable: `pid`
+  --> crates\nanobot-core\src\con
+text\migration.rs:64:40
+   |
+64 |             let stmt_str = 
+if let Some(pid) = parent_id {
+   |                             
+           ^^^ help: if this is 
+intentional, prefix it with an 
+underscore: `_pid`
+
+warning: variable does not need 
+to be mutable
+  --> crates\nanobot-core\src\ski
+lls\metadata.rs:69:13
+   |
+69 |         let mut 
+dependencies = Vec::new();
+   |             ----^^^^^^^^^^^^
+   |             |
+   |             help: remove 
+this `mut`
+
+warning: variable does not need 
+to be mutable
+  --> crates\nanobot-core\src\sys
+tem\resources.rs:53:13
+   |
+53 |         let mut sys = 
+self.system.lock().unwrap();
+   |             ----^^^
+   |             |
+   |             help: remove 
+this `mut`
+
+Some errors have detailed 
+explanations: E0063, E0277, 
+E0308, E0382, E0599.
+For more information about an 
+error, try `rustc --explain 
+E0063`.
+warning: `nanobot-core` (lib) 
+generated 11 warnings
+error: could not compile 
+`nanobot-core` (lib) due to 9 
+previous errors; 11 warnings 
+emitted

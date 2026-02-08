@@ -39,6 +39,12 @@ pub struct Config {
     pub mcp: Option<McpConfig>,
     #[serde(default)]
     pub browser: Option<BrowserConfig>,
+    #[serde(default = "default_context_token_limit")]
+    pub context_token_limit: usize,
+}
+
+fn default_context_token_limit() -> usize {
+    32_000
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -63,7 +69,6 @@ pub struct McpConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
-    #[serde(default)]
     pub servers: Vec<crate::mcp::McpServerConfig>,
 }
 
@@ -75,6 +80,20 @@ pub struct BrowserConfig {
     pub user_data_dir: Option<String>,
     #[serde(default)]
     pub proxy: Option<String>,
+    #[serde(default)]
+    pub use_docker: bool,
+    #[serde(default = "default_docker_image")]
+    pub docker_image: String,
+    #[serde(default = "default_docker_port")]
+    pub docker_port: u16,
+}
+
+fn default_docker_image() -> String {
+    "zenika/alpine-chrome:with-puppeteer".to_string()
+}
+
+fn default_docker_port() -> u16 {
+    9222
 }
 
 fn default_headless() -> bool {
@@ -83,13 +102,18 @@ fn default_headless() -> bool {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OpenRouterConfig {
-    pub api_key: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub api_keys: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AntigravityConfig {
     #[serde(default)]
-    pub api_key: String, // Google AI Studio API key
+    pub api_key: Option<String>, // Google AI Studio API key
+    #[serde(default)]
+    pub api_keys: Option<Vec<String>>,
     #[serde(default)]
     pub base_url: Option<String>,
     #[serde(default)]
@@ -99,7 +123,9 @@ pub struct AntigravityConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OpenAIConfig {
     #[serde(default)]
-    pub api_key: String, // OpenAI API key (for API access, not Plus subscription)
+    pub api_key: Option<String>, // OpenAI API key
+    #[serde(default)]
+    pub api_keys: Option<Vec<String>>,
 }
 
 impl Config {

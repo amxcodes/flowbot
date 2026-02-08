@@ -16,7 +16,7 @@ pub struct TelegramConfirmationAdapter {
 }
 
 #[derive(Debug, Clone)]
-struct CallbackResponse {
+pub struct CallbackResponse {
     request_id: String,
     allowed: bool,
 }

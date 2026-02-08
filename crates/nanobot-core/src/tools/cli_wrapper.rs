@@ -46,13 +46,24 @@ pub async fn run_and_format(mut args: RunCommandArgs) -> Result<String> {
     args.command = resolve_command(&args.command);
 
     // Check if Docker execution is requested
+    // Check if Docker execution is requested
     if args.use_docker {
         // First check if Docker is available
         if super::docker_executor::is_docker_available() {
+            let config = super::docker_executor::SandboxConfig {
+                image: args.docker_image.clone().unwrap_or_else(|| "alpine:latest".to_string()),
+                // For a general "run_command" tool, we likely need network and write access
+                // to match host capabilities but within a container.
+                allow_network: true, 
+                writable_workspace: true,
+                workdir: Some("/workspace".to_string()),
+                env_vars: Vec::new(), // Pass env vars if needed?
+            };
+
             match super::docker_executor::execute_in_container(
                 &args.command,
                 &args.args,
-                None,
+                &config,
             ).await {
                 Ok(output) => {
                     return Ok(format!(
@@ -63,12 +74,12 @@ pub async fn run_and_format(mut args: RunCommandArgs) -> Result<String> {
                     ));
                 }
                 Err(e) => {
-                    // Docker execution failed, fall back to host
-                    eprintln!("Docker execution failed: {}. Falling back to host.", e);
+                    // Strict Sandbox: Do NOT fall back to host if Docker was requested but failed.
+                    return Err(anyhow::anyhow!("Docker execution failed: {}", e));
                 }
             }
         } else {
-            eprintln!("Docker not available. Falling back to host execution.");
+             return Err(anyhow::anyhow!("Docker execution requested but Docker is not available on this system."));
         }
     }
 

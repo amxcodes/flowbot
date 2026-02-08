@@ -18,6 +18,7 @@ use std::path::PathBuf;
 #[derive(Debug)]
 pub enum StreamChunk {
     TextDelta(String),
+    Thinking(String),
     ToolCall(String),
     ToolResult(String),
     Done,
@@ -26,6 +27,7 @@ pub enum StreamChunk {
 #[derive(Debug)]
 pub struct AgentMessage {
     pub session_id: String,
+    pub tenant_id: String, // Added for Multi-tenancy
     pub content: String,
     pub response_tx: mpsc::Sender<StreamChunk>,
 }
@@ -106,14 +108,40 @@ impl AgentProvider {
     }
 }
 
+/// Simple heuristic token estimator (char/4)
+fn estimate_tokens(text: &str) -> usize {
+    text.len() / 4
+}
+
+fn estimate_message_tokens(msg: &Message) -> usize {
+    match msg {
+        Message::User { content } => {
+            content.iter().map(|c| match c {
+                UserContent::Text(t) => estimate_tokens(&t.text),
+                _ => 0, // Ignore images for simple estimation
+            }).sum()
+        }
+        Message::Assistant { content, .. } => {
+            content.iter().map(|c| match c {
+                AssistantContent::Text(t) => estimate_tokens(&t.text),
+                _ => 0,
+            }).sum()
+        }
+    }
+}
+
 pub struct AgentLoop {
-    provider: AgentProvider,
+    provider: std::sync::Arc<tokio::sync::RwLock<AgentProvider>>,
+    config: config::Config,
+    key_indices: std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, usize>>>,
     context_tree: std::sync::Arc<ContextTree>,
     skill_loader: Option<std::sync::Arc<tokio::sync::Mutex<crate::skills::SkillLoader>>>,
     cron_scheduler: crate::cron::CronScheduler,
     agent_manager: std::sync::Arc<crate::gateway::agent_manager::AgentManager>,
     memory_manager: std::sync::Arc<crate::memory::MemoryManager>,
+    #[allow(dead_code)]
     mcp_manager: Option<std::sync::Arc<crate::mcp::McpManager>>,
+    #[allow(dead_code)]
     workspace_watcher: Option<crate::memory::WorkspaceWatcher>,
     personality: Option<personality::PersonalityContext>,
     cron_event_rx: Option<tokio::sync::mpsc::Receiver<crate::cron::CronEvent>>,
@@ -123,66 +151,140 @@ pub struct AgentLoop {
     resource_monitor: std::sync::Arc<crate::system::resources::ResourceMonitor>,
     #[cfg(feature = "browser")]
     browser_client: Option<crate::browser::BrowserClient>,
+    active_tasks: std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, tokio::task::AbortHandle>>>,
 }
 
 impl AgentLoop {
-    pub async fn new() -> Result<Self> {
-        let config = config::Config::load()?;
-        
+    /// Create a provider instance based on config and key indices
+    pub async fn create_provider(
+        config: &config::Config, 
+        indices: &std::collections::HashMap<String, usize>
+    ) -> Result<AgentProvider> {
         // Priority 1: Check for LLM failover config
-        let provider = if let Some(llm_config) = config.llm.clone() {
+        if let Some(llm_config) = config.llm.clone() {
             tracing::info!("Using MetaProvider with failover chain: {:?}", llm_config.failover_chain);
             
             let meta_client = crate::llm::meta_provider::MetaClient::new(llm_config.clone()).await?;
-            // Use a default model name - providers will use their configured models
             let model_name = "gemini-2.0-flash-001".to_string();
             
-            AgentProvider::Meta(
+            return Ok(AgentProvider::Meta(
                 crate::llm::meta_provider::MetaCompletionModel::make(&meta_client, model_name)
-            )
-        } else {
-            // Priority 2: Fall back to traditional default_provider
-            let default = config.default_provider.as_str();
-            
-            match default {
-                "antigravity" => {
-                    let client = AntigravityClient::from_env().await?;
-                    AgentProvider::Antigravity(client.completion_model("gemini-2.0-flash-exp"))
-                }
-                "openrouter" => {
-                    let api_key = config
-                        .providers
-                        .openrouter
-                        .as_ref()
-                        .map(|c| c.api_key.clone())
-                        .ok_or_else(|| anyhow::anyhow!("OpenRouter API key not configured"))?;
+            ));
+        }
 
-                    let client = openai::Client::new(&api_key)?;
-                    // Use completions_api to return CompletionModel instead of ResponsesCompletionModel
-                    AgentProvider::OpenAI(
-                        client
-                            .completions_api()
-                            .completion_model("google/gemini-2.0-flash-001"),
-                    )
-                }
-                "openai" | _ => {
-                    let api_key = std::env::var("OPENAI_API_KEY")
-                        .or_else(|_| {
-                            config
-                                    .providers
-                                    .openai
-                                    .as_ref()
-                                    .map(|c| c.api_key.clone())
-                                    .ok_or(String::new())
-                        })
-                        .map_err(|_| anyhow::anyhow!("OpenAI API Key missing"))?;
+        // Priority 2: Fall back to traditional default_provider
+        let default = config.default_provider.as_str();
+        let index = *indices.get(default).unwrap_or(&0);
+        
+        match default {
+            "antigravity" => {
+                let ag_config = config.providers.antigravity.as_ref();
+                
+                // Resolution logic: 
+                // 1. Try to get key from rotation list (api_keys) using index
+                // 2. Fallback to single api_key
+                // 3. Fallback to env var GOOGLE_API_KEY (implicit in client, but we set it here for rotation)
+                
+                let key_to_use = if let Some(c) = ag_config {
+                     if let Some(keys) = &c.api_keys {
+                         if !keys.is_empty() {
+                             Some(keys[index % keys.len()].clone())
+                         } else {
+                             c.api_key.clone()
+                         }
+                     } else {
+                         c.api_key.clone()
+                     }
+                } else {
+                    None
+                };
 
-                    let client = openai::Client::new(&api_key)?;
-                    // Use completions_api to return CompletionModel
-                    AgentProvider::OpenAI(client.completions_api().completion_model("gpt-4o"))
+                if let Some(k) = key_to_use {
+                     unsafe { std::env::set_var("GOOGLE_API_KEY", k); }
                 }
+                
+                let client = AntigravityClient::from_env().await?;
+                Ok(AgentProvider::Antigravity(client.completion_model("gemini-2.0-flash-exp")))
             }
+            "openrouter" => {
+                let or_config = config.providers.openrouter.as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("OpenRouter not configured"))?;
+                
+                let api_key = if let Some(keys) = &or_config.api_keys {
+                     if !keys.is_empty() {
+                         keys[index % keys.len()].clone()
+                     } else {
+                         or_config.api_key.clone().unwrap_or_default()
+                     }
+                } else {
+                    or_config.api_key.clone().unwrap_or_default()
+                };
+
+                if api_key.is_empty() {
+                    return Err(anyhow::anyhow!("OpenRouter API key missing. Configure 'api_key' or 'api_keys' in config.toml"));
+                }
+
+                let client = openai::Client::new(&api_key)?;
+                Ok(AgentProvider::OpenAI(
+                    client.completions_api().completion_model("google/gemini-2.0-flash-001"),
+                ))
+            }
+            "openai" | _ => {
+                let oa_config = config.providers.openai.as_ref();
+                let api_key = if let Some(c) = oa_config {
+                    if let Some(keys) = &c.api_keys {
+                        if !keys.is_empty() {
+                            Some(keys[index % keys.len()].clone())
+                        } else {
+                            c.api_key.clone()
+                        }
+                    } else {
+                        c.api_key.clone()
+                    }
+                } else {
+                    None
+                }
+                .or_else(|| std::env::var("OPENAI_API_KEY").ok())
+                .ok_or_else(|| anyhow::anyhow!("OpenAI API Key missing"))?;
+
+                let client = openai::Client::new(&api_key)?;
+                Ok(AgentProvider::OpenAI(client.completions_api().completion_model("gpt-4o")))
+            }
+        }
+    }
+
+    /// Rotate the current provider's API key
+    async fn rotate_provider(&self) -> Result<()> {
+        let mut key_indices = self.key_indices.lock().await;
+        // Determine current provider name from config
+        let provider_name = if self.config.llm.is_some() {
+            "meta".to_string()
+        } else {
+             self.config.default_provider.clone()
         };
+        
+        // Increment index
+        let entry = key_indices.entry(provider_name).or_insert(0);
+        *entry += 1;
+        tracing::info!("Rotating auth key for provider '{}' (index: {})", self.config.default_provider,entry);
+        
+        // Re-create provider
+        let new_provider = Self::create_provider(&self.config, &key_indices).await?;
+        
+        let mut provider_guard = self.provider.write().await;
+        *provider_guard = new_provider;
+        
+        Ok(())
+    }
+
+    pub async fn new() -> Result<Self> {
+        let config = config::Config::load()?;
+        
+        // Initial provider creation
+        let indices_map = std::collections::HashMap::new();
+        let provider = Self::create_provider(&config, &indices_map).await?;
+        let provider = std::sync::Arc::new(tokio::sync::RwLock::new(provider));
+        let key_indices = std::sync::Arc::new(tokio::sync::Mutex::new(indices_map));
 
         let db_path = PathBuf::from(".").join(".nanobot").join("context_tree.db");
 
@@ -245,6 +347,7 @@ impl AgentLoop {
         let workspace_watcher = match crate::memory::WorkspaceWatcher::new(
             watch_path.clone(),
             memory_manager.clone(),
+            None, // Default tenant
         ) {
             Ok(w) => {
                 println!("👀 File watcher active on {:?}", watch_path);
@@ -347,6 +450,8 @@ impl AgentLoop {
 
         Ok(Self {
             provider,
+            config,
+            key_indices,
             context_tree,
             skill_loader,
             cron_scheduler,
@@ -361,6 +466,7 @@ impl AgentLoop {
             resource_monitor,
             #[cfg(feature = "browser")]
             browser_client,
+            active_tasks: std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         })
     }
 
@@ -391,6 +497,7 @@ impl AgentLoop {
                                 println!("💉 Injecting SystemEvent into session {}", session_id);
                                 let msg = AgentMessage {
                                     session_id,
+                                    tenant_id: "default".to_string(), // Scheduler runs as system/default
                                     content: format!("(System Event) {}", text),
                                     response_tx,
                                 };
@@ -508,13 +615,38 @@ impl AgentLoop {
 
         // Main agent message loop
         while let Some(msg) = rx.recv().await {
-            // Update last interaction tracking
+            let session_id = msg.session_id.clone();
+            let agent_clone = agent.clone();
+
+            // Cancel existing task for this session if any regarding interruptibility
             {
-                let mut last = agent.last_interaction.lock().await;
-                *last = Some((msg.session_id.clone(), msg.response_tx.clone()));
+                let mut tasks = agent.active_tasks.lock().await;
+                if let Some(handle) = tasks.remove(&session_id) {
+                    tracing::info!("⚠️ Interrupting active task for session {}", session_id);
+                    handle.abort();
+                }
             }
 
-            agent.process_streaming(msg).await;
+            // Spawn new task
+            let session_id_clone = session_id.clone();
+            let task = tokio::spawn(async move {
+                let session_id = session_id_clone;
+                // Update last interaction tracking
+                {
+                    let mut last = agent_clone.last_interaction.lock().await;
+                    *last = Some((msg.session_id.clone(), msg.response_tx.clone()));
+                }
+
+                agent_clone.process_streaming(msg).await;
+
+                // Cleanup task from map upon completion
+                let mut tasks = agent_clone.active_tasks.lock().await;
+                tasks.remove(&session_id);
+            });
+
+            // Store handle
+            let mut tasks = agent.active_tasks.lock().await;
+            tasks.insert(session_id, task.abort_handle());
         }
     }
 
@@ -549,9 +681,56 @@ impl AgentLoop {
         let mut chat_history = self.get_conversation_history(&msg.session_id);
 
         // Apply adaptive context history limit
+        // Apply adaptive context history limit (Count-based)
         if chat_history.len() > adaptive_config.context_history_limit {
             let skip = chat_history.len() - adaptive_config.context_history_limit;
             chat_history = chat_history.into_iter().skip(skip).collect();
+        }
+
+        // Apply Token Limit (Heuristic) - Hard cap at 32k tokens to prevent overflow
+        // Logic: Drop oldest messages until we fit
+        let total_tokens: usize = chat_history.iter().map(estimate_message_tokens).sum();
+        let token_limit = self.config.context_token_limit;
+        
+        if total_tokens > token_limit {
+             tracing::warn!("⚠️ Context exceeding token limit (~{} > {}). Summarizing...", total_tokens, token_limit);
+             
+             // Strategy: Summarize the first 50% of history into a single system message
+             let split_idx = chat_history.len() / 2;
+             if split_idx > 0 {
+                 let older_msgs = chat_history.drain(0..split_idx).collect::<Vec<_>>();
+                 
+                 // Create temporary provider for summarization (avoid deadlock by cloning provider beforehand if needed, 
+                 // but here we can just use the read lock or a separate lightweight request)
+                 // For simplicity in this step, we'll try to just perform a direct summarization if possible, 
+                 // or just execute a truncation with a system note if summarization is too expensive inline.
+                 //
+                 // Better: Spawn a summarization task? No, we need it now. 
+                 // Let's do a meaningful truncation -> "Summary: [Old context removed]" 
+                 // But user asked for *Summarization*.
+                 
+                 // We will effectively collapse them into a single User message saying:
+                 // "Here is a summary of the previous conversation: ..."
+                 // To do this properly requires an LLM call. 
+                 
+                 // FOR NOW: We will implement the PLUMBING for it. 
+                 // 1. Convert older_msgs to string
+                 // 2. Call internal summarize (we need to implement `summarize` method on AgentLoop)
+                 
+                 match self.summarize_messages(&older_msgs).await {
+                     Ok(summary) => {
+                         // Insert summary as a new User message at the start
+                         chat_history.insert(0, Message::User { 
+                             content: OneOrMany::one(UserContent::Text(Text { text: format!("(Prior Verification Summary)\n{}", summary) })) 
+                         });
+                         tracing::info!("✅ Compressed {} messages into summary", older_msgs.len());
+                     }
+                     Err(e) => {
+                         tracing::error!("Failed to summarize: {}. Falling back to truncation.", e);
+                         // Fallback is already done by drain, just didn't insert summary.
+                     }
+                 }
+             }
         }
 
         chat_history.push(Message::User {
@@ -589,7 +768,7 @@ impl AgentLoop {
             };
 
             // Auto-RAG: Retrieve relevant context from Memory (with adaptive limit)
-            let context_docs = match self.memory_manager.search(&msg.content, adaptive_config.rag_doc_count).await {
+            let context_docs = match self.memory_manager.search(&msg.content, adaptive_config.rag_doc_count, Some(&msg.tenant_id)).await {
                 Ok(results) => {
                     if !results.is_empty() {
                          tracing::info!("📚 RAG: Found {} relevant documents", results.len());
@@ -620,7 +799,34 @@ impl AgentLoop {
                 additional_params: Some(json!({})),
             };
 
-            let mut stream = match self.provider.stream(request).await {
+            // Auth Rotation / Retry Loop
+            let mut retry_count = 0;
+            let max_retries = 3;
+            
+            let stream = loop {
+                let provider_guard = self.provider.read().await;
+                match provider_guard.stream(request.clone()).await {
+                    Ok(s) => break Ok(s),
+                    Err(e) => {
+                         drop(provider_guard); // Drop read lock to allow rotation
+                         let err_str = e.to_string();
+                         // Check for 429 (Too Many Requests) or Quota errors
+                         if (err_str.contains("429") || err_str.contains("Quota") || err_str.contains("Rate limit")) && retry_count < max_retries {
+                             retry_count += 1;
+                             tracing::warn!("⚠️ Provider rate limit hit: {}. Rotating key (attempt {}/{})", err_str, retry_count, max_retries);
+                             if let Err(rot_err) = self.rotate_provider().await {
+                                 tracing::error!("Failed to rotate provider: {}", rot_err);
+                                 // Don't break immediately, maybe next retry works? 
+                                 // But if rotation failed, likely no more keys.
+                             }
+                             continue;
+                         }
+                         break Err(e);
+                    }
+                }
+            };
+
+            let mut stream = match stream {
                 Ok(s) => s,
                 Err(e) => {
                     let _ = msg
@@ -634,22 +840,50 @@ impl AgentLoop {
             let mut tool_calls = Vec::new();
             let mut current_text = String::new();
 
+            let mut thinking = false;
+
             while let Some(chunk_res) = stream.next().await {
                 match chunk_res {
                     Ok(chunk) => {
                         match chunk {
                             StreamedAssistantContent::Text(text) => {
-                                current_text.push_str(&text.text);
-                                let _ = msg
-                                    .response_tx
-                                    .send(StreamChunk::TextDelta(text.text))
-                                    .await;
+                                let content = text.text.clone();
+                                current_text.push_str(&content);
+                                
+                                // Simple parser for <think> blocks
+                                // Note: detailed split-tag handling omitted for brevity, assumes tags arrive mostly intact
+                                let mut remaining = content.as_str();
+                                
+                                while !remaining.is_empty() {
+                                    if !thinking {
+                                        if let Some(start_idx) = remaining.find("<think>") {
+                                            if start_idx > 0 {
+                                                let pre = &remaining[0..start_idx];
+                                                let _ = msg.response_tx.send(StreamChunk::TextDelta(pre.to_string())).await;
+                                            }
+                                            thinking = true;
+                                            remaining = &remaining[start_idx + 7..];
+                                        } else {
+                                            // No start tag, normal text
+                                            let _ = msg.response_tx.send(StreamChunk::TextDelta(remaining.to_string())).await;
+                                            break;
+                                        }
+                                    } else {
+                                        if let Some(end_idx) = remaining.find("</think>") {
+                                            let think_content = &remaining[0..end_idx];
+                                            let _ = msg.response_tx.send(StreamChunk::Thinking(think_content.to_string())).await;
+                                            thinking = false;
+                                            remaining = &remaining[end_idx + 8..];
+                                        } else {
+                                            // No end tag, all thinking
+                                            let _ = msg.response_tx.send(StreamChunk::Thinking(remaining.to_string())).await;
+                                            break;
+                                        }
+                                    }
+                                }
                             }
                             StreamedAssistantContent::ToolCall(tool) => {
-                                // Rig streams tool calls, sometimes incrementally or fully.
-                                // Assuming full tool call for now based on Rig's default behavior for most providers
-                                // or we accumulate if needed. Rig 0.0.6 usually gives fully formed tool calls in the stream event if using high-level
-                                // but with generic stream it might be different. Let's assume we collect them.
+                                // Accumulate tool calls
                                 tool_calls.push(tool);
                             }
                             _ => {}
@@ -717,6 +951,7 @@ impl AgentLoop {
                             self.skill_loader.as_ref(),
                             #[cfg(feature = "browser")]
                             self.browser_client.as_ref(),
+                            Some(&msg.tenant_id),
                         )
                         .await
                         {
@@ -760,6 +995,62 @@ impl AgentLoop {
         )?;
         
         Ok(())
+    }
+
+    // Helper to summarize a list of messages
+    async fn summarize_messages(&self, msgs: &[Message]) -> Result<String> {
+        let text_content: String = msgs.iter().map(|m| {
+            match m {
+                Message::User { content } => {
+                    content.iter().map(|c| match c {
+                        UserContent::Text(t) => format!("User: {}\n", t.text),
+                        _ => "User: [Media]\n".to_string(),
+                    }).collect::<String>()
+                }
+                Message::Assistant { content, .. } => {
+                     content.iter().map(|c| match c {
+                        AssistantContent::Text(t) => format!("Assistant: {}\n", t.text),
+                        _ => "Assistant: [Media]\n".to_string(),
+                    }).collect::<String>()
+                }
+            }
+        }).collect();
+
+        if text_content.is_empty() {
+            return Ok("No history.".to_string());
+        }
+
+        let prompt = format!(
+            "Summarize the following conversation history, retaining key facts, user preferences, and important context, while removing conversational filler:\n\n{}", 
+            text_content
+        );
+
+        let request = CompletionRequest {
+            chat_history: OneOrMany::one(Message::User { content: OneOrMany::one(UserContent::text(prompt)) }),
+            preamble: Some("You are a helpful summarizer.".to_string()),
+            max_tokens: Some(500),
+            temperature: Some(0.3),
+            tools: vec![],
+            tool_choice: None,
+            documents: vec![],
+            additional_params: None,
+        };
+
+        // We use the same provider
+        let provider_guard = self.provider.read().await;
+        let stream = provider_guard.stream(request).await?;
+        
+        let mut summary = String::new();
+        let mut s = stream;
+        while let Some(chunk_res) = s.next().await {
+            if let Ok(chunk) = chunk_res {
+                if let StreamedAssistantContent::Text(t) = chunk {
+                    summary.push_str(&t.text);
+                }
+            }
+        }
+        
+        Ok(summary)
     }
 
     fn get_conversation_history(&self, session_id: &str) -> Vec<Message> {

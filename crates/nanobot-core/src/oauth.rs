@@ -1,4 +1,4 @@
-use crate::config::{OAuthTokens, ProviderToken};
+pub use crate::config::{OAuthTokens, ProviderToken};
 use anyhow::Result;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand::Rng;

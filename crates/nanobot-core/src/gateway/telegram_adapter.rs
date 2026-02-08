@@ -109,6 +109,7 @@ impl TelegramBot {
                 let (response_tx, mut response_rx) = mpsc::channel(100);
                 let agent_msg = crate::agent::AgentMessage {
                     session_id: format!("telegram:{}", msg.chat.id),
+                    tenant_id: format!("telegram:{}", msg.chat.id), // Use Chat ID as Tenant ID
                     content: text,
                     response_tx,
                 };

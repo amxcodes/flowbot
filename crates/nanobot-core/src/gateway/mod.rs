@@ -160,6 +160,7 @@ async fn handle_socket(socket: WebSocket, gateway: Arc<Gateway>) {
                     if !content.is_empty() {
                         let msg = AgentMessage {
                             session_id: session_id.clone(),
+                            tenant_id: "default".to_string(), // Gateway/WebSocket implies default tenant for now
                             content,
                             response_tx: response_tx.clone(),
                         };

@@ -91,20 +91,18 @@ async fn execute_agent_message(
     message: &str,
     _model_override: Option<String>,
 ) -> Result<String> {
-    use crate::agent::AgentProvider;
+    use crate::agent::AgentLoop;
     use futures::StreamExt;
     use rig::OneOrMany;
     use rig::completion::message::{Text, UserContent};
     use rig::completion::{CompletionRequest, Message};
     use rig::streaming::StreamedAssistantContent;
 
-    // Load Antigravity client
-    // Note: Currently only Antigravity is supported for isolated execution
-    // OpenAI support can be added later once the client API issues are resolved
-    let client = crate::antigravity::AntigravityClient::from_env()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to create Antigravity client: {}", e))?;
-    let provider = AgentProvider::Antigravity(client.completion_model("gemini-2.0-flash-exp"));
+    // Load Config and Create Provider
+    // This ensures we respect the global configuration (provider selection, API keys, limits)
+    let config = crate::config::Config::load()?;
+    let indices = std::collections::HashMap::new(); // Default to first key for isolated runs
+    let provider = AgentLoop::create_provider(&config, &indices).await?;
 
     // Build chat history with just the user message
     let chat_history = vec![Message::User {

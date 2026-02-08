@@ -1,7 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use rig::client::{ProviderClient, CompletionClient};
-use rig::completion::Prompt;
+use rig::client::ProviderClient;
 use rig::providers::openai;
 use tokio::sync::mpsc;
 use std::path::PathBuf;
@@ -9,9 +8,8 @@ use uuid::Uuid;
 
 // Import modules from nanobot-core
 use nanobot_core::{
-    agent,
     AgentLoop, // Re-exported at root
-    config, oauth, doctor, tools, antigravity, gateway, security,
+    config, oauth, doctor, gateway, security,
     persistence::PersistenceManager,
 };
 
@@ -698,7 +696,7 @@ async fn main() -> Result<()> {
                             let mut metadata = std::collections::HashMap::new();
                             metadata.insert("path".to_string(), file.display().to_string());
                             
-                            if let Err(e) = manager.add_document(&content, metadata).await {
+                            if let Err(e) = manager.add_document(&content, metadata, None).await {
                                 eprintln!("⚠️  Failed to index {}: {}", file.display(), e);
                             } else {
                                 println!("✓ {}", file.display());
@@ -783,7 +781,7 @@ async fn main() -> Result<()> {
             println!("⚙️  Initializing agent...");
             
             // Create agent loop with all features
-            let mut agent = AgentLoop::new().await?;
+            let agent = AgentLoop::new().await?;
             let (agent_tx, agent_rx) = tokio::sync::mpsc::channel(100);
             
             // Spawn agent loop in background
@@ -1034,7 +1032,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_rich_tui_chat(provider: Option<String>) -> Result<()> {
+async fn run_rich_tui_chat(_provider: Option<String>) -> Result<()> {
     // Initialize TUI Logger
     nanobot_cli::ui::logger::LoggerService::init()?;
     
@@ -1084,6 +1082,7 @@ async fn run_rich_loop(
                 
                 let msg = nanobot_core::agent::AgentMessage {
                     session_id: session_id.to_string(),
+                    tenant_id: "default".to_string(), // CLI/TUI uses default tenant
                     content: input,
                     response_tx,
                 };
@@ -1093,28 +1092,40 @@ async fn run_rich_loop(
                     break;
                 }
                 
-                // Collect response and log tool events
                 let mut full_response = String::new();
+                let mut thinking_buffer = String::new();
                 
                 while let Some(chunk) = response_rx.recv().await {
                     match chunk {
+                        nanobot_core::agent::StreamChunk::Thinking(text) => {
+                            thinking_buffer.push_str(&text);
+                        }
                         nanobot_core::agent::StreamChunk::TextDelta(text) => {
+                            if !thinking_buffer.is_empty() {
+                                log::info!("💭 Thought: {}", thinking_buffer);
+                                thinking_buffer.clear();
+                            }
                             full_response.push_str(&text);
-                            // Optional: If TUI supported streaming updates to the log, we'd do it here.
-                            // For now, we wait for full response to log clean block, or maybe just log?
-                            // Logging every character is bad. Logging lines?
-                            // Let's just accumulate and log at end for text, but log tool events immediately.
                         }
                         nanobot_core::agent::StreamChunk::ToolCall(name) => {
+                            if !thinking_buffer.is_empty() {
+                                log::info!("💭 Thought: {}", thinking_buffer);
+                                thinking_buffer.clear();
+                            }
                             log::info!("🔧 Tool: {}", name);
                         }
                         nanobot_core::agent::StreamChunk::ToolResult(res) => {
-                            // Truncate result for logs if too long
                             let display_res: String = res.chars().take(100).collect();
                             let suffix = if res.len() > 100 { "..." } else { "" };
                             log::info!("✓ Result: {}{}", display_res, suffix);
                         }
-                        nanobot_core::agent::StreamChunk::Done => break,
+                        nanobot_core::agent::StreamChunk::Done => {
+                            if !thinking_buffer.is_empty() {
+                                log::info!("💭 Thought: {}", thinking_buffer);
+                                thinking_buffer.clear();
+                            }
+                            break;
+                        }
                     }
                 }
                 
@@ -1127,7 +1138,7 @@ async fn run_rich_loop(
     tui.stop()?;
     Ok(())
 }
-async fn run_cli_agent(message: &str, provider: Option<String>, model: Option<String>) -> Result<()> {
+async fn run_cli_agent(message: &str, _provider: Option<String>, _model: Option<String>) -> Result<()> {
     // Initialize AgentLoop (now CLI gets RAG + Cron + Personality!)
     let agent_loop = nanobot_core::agent::AgentLoop::new().await?;
     
@@ -1143,6 +1154,7 @@ async fn run_cli_agent(message: &str, provider: Option<String>, model: Option<St
     // Send message to AgentLoop
     let agent_msg = nanobot_core::agent::AgentMessage {
         session_id: format!("cli:{}", uuid::Uuid::new_v4()),
+        tenant_id: "default".to_string(), // CLI uses default tenant
         content: message.to_string(),
         response_tx,
     };
@@ -1153,6 +1165,10 @@ async fn run_cli_agent(message: &str, provider: Option<String>, model: Option<St
     let mut first_chunk = true;
     while let Some(chunk) = response_rx.recv().await {
         match chunk {
+            nanobot_core::agent::StreamChunk::Thinking(text) => {
+                print!("\x1b[90m{}\x1b[0m", text);
+                std::io::Write::flush(&mut std::io::stdout())?;
+            }
             nanobot_core::agent::StreamChunk::TextDelta(text) => {
                 if first_chunk {
                     print!("\n"); // Add newline before first response
@@ -1204,18 +1220,25 @@ async fn run_oauth_login(provider: &str) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 fn get_openai_like_client(provider_name: &str, config: &config::Config) -> Result<openai::Client> {
     match provider_name {
         "openrouter" => {
             // Use OpenRouter API key
             if let Some(ref or_config) = config.providers.openrouter {
-                if !or_config.api_key.is_empty() && !or_config.api_key.starts_with("sk-or-v1-...") {
-                    unsafe {
-                        std::env::set_var("OPENAI_API_KEY", &or_config.api_key);
-                        std::env::set_var("OPENAI_API_BASE", "https://openrouter.ai/api/v1");
+                if let Some(api_key) = &or_config.api_key {
+                    if !api_key.is_empty() && !api_key.starts_with("sk-or-v1-...") {
+                        unsafe {
+                            std::env::set_var("OPENAI_API_KEY", api_key);
+                            std::env::set_var("OPENAI_API_BASE", "https://openrouter.ai/api/v1");
+                        }
+                    } else {
+                        return Err(anyhow::anyhow!(
+                            "OpenRouter API key not configured. Add your key to config.toml"
+                        ));
                     }
                 } else {
-                    return Err(anyhow::anyhow!(
+                     return Err(anyhow::anyhow!(
                         "OpenRouter API key not configured. Add your key to config.toml"
                     ));
                 }
@@ -1224,22 +1247,24 @@ fn get_openai_like_client(provider_name: &str, config: &config::Config) -> Resul
         "openai" => {
             // OpenAI - support both API key and OAuth
             if let Some(ref openai_config) = config.providers.openai {
-                if !openai_config.api_key.is_empty() {
-                    // Use API key
-                    unsafe {
-                        std::env::set_var("OPENAI_API_KEY", &openai_config.api_key);
-                        std::env::set_var("OPENAI_API_BASE", "https://api.openai.com/v1");
-                    }
+                if let Some(api_key) = &openai_config.api_key {
+                    if !api_key.is_empty() {
+                        // Use API key
+                        unsafe {
+                            std::env::set_var("OPENAI_API_KEY", api_key);
+                            std::env::set_var("OPENAI_API_BASE", "https://api.openai.com/v1");
+                        }
+                    } 
                 } else {
                     // Try OAuth token (ChatGPT Plus subscription)
-                    let tokens = config::OAuthTokens::load()?;
+                    let tokens = nanobot_core::oauth::OAuthTokens::load()?;
                     if let Some(token) = tokens.get(provider_name) {
                         unsafe {
                             std::env::set_var("OPENAI_API_KEY", &token.access_token);
                             std::env::set_var("OPENAI_API_BASE", "https://api.openai.com/v1");
                         }
                     } else {
-                        return Err(anyhow::anyhow!(
+                         return Err(anyhow::anyhow!(
                             "OpenAI not configured. Either:\n  1. Add API key to config.toml (get from https://platform.openai.com/api-keys)\n  2. Run: nanobot-rs login openai (requires OAuth client ID)"
                         ));
                     }
