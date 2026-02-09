@@ -40,6 +40,7 @@ use std::pin::Pin;
 
 pub enum AgentProvider {
     Antigravity(crate::antigravity::AntigravityCompletionModel),
+    Google(crate::google::GoogleCompletionModel),
     OpenAI(openai::CompletionModel),
     Meta(crate::llm::meta_provider::MetaCompletionModel),
 }
@@ -79,6 +80,15 @@ impl AgentProvider {
                     })
                 });
                 Ok(Box::pin(mapped))
+            }
+            AgentProvider::Google(m) => {
+                 let stream = m.stream(request).await?;
+                 let mapped = stream.map(|res| {
+                     res.map(|content| {
+                         StreamedAssistantContent::Text(content.content)
+                     })
+                 });
+                 Ok(Box::pin(mapped))
             }
             AgentProvider::OpenAI(m) => {
                 let stream = m.stream(request).await?;
@@ -181,30 +191,35 @@ impl AgentLoop {
                 let ag_config = config.providers.antigravity.as_ref();
                 
                 // Resolution logic: 
-                // 1. Try to get key from rotation list (api_keys) using index
-                // 2. Fallback to single api_key
-                // 3. Fallback to env var GOOGLE_API_KEY (implicit in client, but we set it here for rotation)
-                
-                let key_to_use = if let Some(c) = ag_config {
-                     if let Some(keys) = &c.api_keys {
-                         if !keys.is_empty() {
-                             Some(keys[index % keys.len()].clone())
-                         } else {
-                             c.api_key.clone()
-                         }
-                     } else {
-                         c.api_key.clone()
-                     }
-                } else {
-                    None
-                };
-
-                if let Some(k) = key_to_use {
-                     unsafe { std::env::set_var("GOOGLE_API_KEY", k); }
-                }
+                // Antigravity now strictly uses OAuth via TokenManager (handled inside client)
+                // We REMOVE the unsafe env var injection for API keys here.
                 
                 let client = AntigravityClient::from_env().await?;
                 Ok(AgentProvider::Antigravity(client.completion_model("gemini-2.0-flash-exp")))
+            }
+            "google" => {
+                let google_config = config.providers.google.as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("Google provider not configured"))?;
+                
+                let api_key = if let Some(keys) = &google_config.api_keys {
+                     if !keys.is_empty() {
+                         keys[index % keys.len()].clone()
+                     } else {
+                         google_config.api_key.clone().unwrap_or_default()
+                     }
+                } else {
+                    google_config.api_key.clone().unwrap_or_default()
+                };
+
+                if api_key.is_empty() {
+                    return Err(anyhow::anyhow!("Google API key missing. Configure 'api_key' or 'api_keys' in [providers.google]"));
+                }
+                
+                let client = reqwest::Client::new();
+                let mut model = crate::google::GoogleCompletionModel::make(&client, "gemini-2.0-flash");
+                model.api_key = api_key;
+                
+                Ok(AgentProvider::Google(model))
             }
             "openrouter" => {
                 let or_config = config.providers.openrouter.as_ref()

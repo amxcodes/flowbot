@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo -e "\033[0;36m🚀 Starting Flowbot Installer...\033[0m"
+echo -e "\033[0;36m🚀 Starting Nanobot Installer...\033[0m"
 
 # 1. Check for Rust/Cargo
 if ! command -v cargo &> /dev/null; then
@@ -21,7 +21,7 @@ if ! command -v cargo &> /dev/null; then
 fi
 
 # 2. Build & Install via Cargo
-echo -e "\033[0;36m📦 Building and Installing Flowbot...\033[0m"
+echo -e "\033[0;36m📦 Building and Installing Nanobot...\033[0m"
 # --force ensures we overwrite any old version
 cargo install --path . --force
 
@@ -29,27 +29,18 @@ cargo install --path . --force
 mkdir -p "$HOME/.nanobot"
 
 echo -e "\n\033[0;32m✨ Installation Complete!\033[0m"
-echo -e "You can now run: \033[1mnanobot doctor\033[0m"
 
-# 4. Prompt for Service Installation (systemd)
-echo -e "\n\033[0;36m📋 Service Installation (Optional)\033[0m"
-echo "Would you like to install Nanobot as a system service?"
-echo "This enables 24/7 background operation with auto-restart."
-read -p "Install as systemd service? [y/N] " -n 1 -r
+# 4. Auto-start wizard (like OpenClaw)
+echo -e "\n\033[0;36m🚀 Starting setup wizard...\033[0m"
 echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    echo -e "\033[0;36m🔧 Installing systemd service...\033[0m"
-    if nanobot service install; then
-        echo -e "\033[0;32m✅ Service installed successfully!\033[0m"
-        echo -e "You can now:"
-        echo -e "  - Start service: \033[1mnanobot service start\033[0m"
-        echo -e "  - Check status:  \033[1mnanobot service status\033[0m"
-        echo -e "  - View logs:     \033[1mjournalctl --user -u nanobot -f\033[0m"
-    else
-        echo -e "\033[0;33m⚠️  Service installation failed.\033[0m"
-        echo "You can install it manually later with: nanobot service install"
-    fi
+
+# Ensure cargo bin is in PATH
+export PATH="$HOME/.cargo/bin:$PATH"
+
+# Run the wizard
+if command -v nanobot &> /dev/null; then
+    nanobot setup --wizard
 else
-    echo "Skipped service installation."
-    echo "You can install it later with: nanobot service install"
+    echo -e "\033[0;33m⚠️  nanobot command not found in PATH\033[0m"
+    echo "Add $HOME/.cargo/bin to your PATH and run: nanobot setup --wizard"
 fi

@@ -39,37 +39,29 @@ impl AntigravityClient {
             .as_ref()
             .and_then(|cfg| cfg.providers.antigravity.clone());
 
-        let api_key = provider_config.as_ref().and_then(|provider| {
-            let key = provider.api_key.as_deref().unwrap_or("").trim().to_string();
-            if key.is_empty() { None } else { Some(key) }
-        });
-
         // Initialize TokenManager
         let manager = Arc::new(TokenManager::new("antigravity"));
         let _ = manager.load_from_store().await; // Load existing token if any
 
         // Check if we have a valid token (even expired, as manager handles refresh)
-        // We attempt to get a token to verify setup, but don't fail immediately if refreshing needed later?
-        // Actually, just checking if we loaded something is enough to know we are in OAuth mode
-        let has_oauth = manager.get_token().await.is_ok(); // This attempts refresh if expired
+        let has_oauth = manager.get_token().await.is_ok(); 
 
         let token_manager = if has_oauth { Some(manager) } else { None };
 
         let base_urls = build_antigravity_base_urls(
             provider_config,
             token_manager.is_some(),
-            api_key.is_some(),
+            false, // API Key support removed for Antigravity provider
         );
 
-        if token_manager.is_none() && api_key.is_none() {
-            Err(anyhow!("No Antigravity token or API key found"))
+        if token_manager.is_none() {
+            Err(anyhow!("No Antigravity token found. run 'nanobot login'"))
         } else {
             eprintln!(
-                "DEBUG: oauth_mode: {}, api_key present: {}",
-                token_manager.is_some(),
-                api_key.is_some()
+                "DEBUG: oauth_mode: {}",
+                token_manager.is_some()
             );
-            Ok(Self::new(base_urls, token_manager, api_key))
+            Ok(Self::new(base_urls, token_manager, None))
         }
     }
 

@@ -57,6 +57,16 @@ pub struct Providers {
     pub openai: Option<OpenAIConfig>,
     #[serde(default)]
     pub telegram: Option<TelegramConfig>,
+    #[serde(default)]
+    pub google: Option<GoogleConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GoogleConfig {
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub api_keys: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -5,27 +5,24 @@ use dialoguer::{Confirm, Input, theme::ColorfulTheme};
 use reqwest::Client;
 use serde_json::Value;
 
+use super::channel_instructions::print_instruction_box;
+
 pub async fn run_telegram_setup_wizard() -> Result<()> {
     println!();
-    println!(
-        "{}",
-        style("╔═══════════════════════════════════════════╗").blue()
+    println!("{}", style("Telegram Bot Setup").bold().cyan());
+    
+    print_instruction_box(
+        "Telegram Bot Token",
+        &[
+            "1) Open Telegram and chat with @BotFather",
+            "2) Run /newbot (or /mybots to manage existing bots)",
+            "3) Follow prompts to name your bot",
+            "4) Copy the token (looks like 123456:ABC-DEF...)",
+            "",
+            "Tip: You can also set TELEGRAM_BOT_TOKEN in your .env file",
+            "Docs: https://core.telegram.org/bots#how-do-i-create-a-bot",
+        ],
     );
-    println!(
-        "{}",
-        style("║   📱 Telegram Bot Setup                   ║").blue()
-    );
-    println!(
-        "{}",
-        style("╚═══════════════════════════════════════════╝").blue()
-    );
-    println!();
-
-    println!("To start, you need a Telegram Bot Token from @BotFather.");
-    println!("1. Open Telegram and search for @BotFather");
-    println!("2. Send /newbot and follow instructions");
-    println!("3. Copy the HTTP API Token");
-    println!();
 
     let mut config = match Config::load() {
         Ok(c) => c,

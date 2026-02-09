@@ -66,10 +66,13 @@ opentelemetry_sdk = { workspace = true }
 opentelemetry-otlp = { workspace = true }
 
 # Slack integration
-slack-morphism = { version = "1.15", features = ["hyper"] }
+slack-morphism = { workspace = true }
 
 # Discord integration
-serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "rustls_backend", "model"] }
+twilight-gateway = { workspace = true }
+twilight-http = { workspace = true }
+twilight-model = { workspace = true }
+twilight-util = { workspace = true }
 
 # Browser automation (optional)
 chromiumoxide = { version = "0.7", optional = true }

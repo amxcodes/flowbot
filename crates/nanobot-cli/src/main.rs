@@ -309,7 +309,46 @@ async fn main() -> Result<()> {
                     workspace_dir: workspace.map(PathBuf::from),
                     skip_wizard: false,
                 };
-                nanobot_core::setup::run_setup_wizard(opts).await?;
+                let result = nanobot_core::setup::run_setup_wizard(opts).await?;
+                
+                // Chain OAuth if requested
+                if result.should_run_oauth {
+                    if let Some(provider) = result.oauth_provider {
+                        println!();
+                        println!("{}", console::style("Running OAuth login...").bold().cyan());
+                        run_oauth_login(&provider).await?;
+                    }
+                }
+                
+                // Chain service installation if requested
+                if result.should_install_service {
+                    println!();
+                    println!("{}", console::style("Installing system service...").bold().cyan());
+                    if let Err(e) = service::install_service().await {
+                        println!("{}", console::style(format!("⚠️  Service installation failed: {}", e)).yellow());
+                        println!("You can install it later with: nanobot service install");
+                    } else {
+                        println!("{}", console::style("✅ Service installed!").green().bold());
+                    }
+                }
+                
+                // Chain TUI hatch if requested
+                if result.should_hatch_tui {
+                    println!();
+                    println!("{}", console::style("🚀 Hatching into TUI...").bold().cyan());
+                    println!();
+                    run_rich_tui_chat().await?;
+                } else if result.should_start_gateway {
+                    // Launch gateway instead of TUI
+                    println!();
+                    println!("{}", console::style("🚀 Starting Gateway...").bold().cyan());
+                    println!("Gateway will keep all your channels connected.");
+                    println!("Press Ctrl+C to stop.");
+                    println!();
+                    
+                    // Run gateway (this is a blocking call)
+                    run_telegram_gateway().await?;
+                }
             } else {
                 // ... basic setup
                 let opts = nanobot_core::setup::SetupOptions {

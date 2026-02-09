@@ -5,6 +5,7 @@ pub mod console;
 pub mod cron;
 pub mod doctor;
 pub mod gateway;
+pub mod google;
 pub mod llm;
 pub mod health;
 pub mod logging;

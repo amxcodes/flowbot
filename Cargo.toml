@@ -71,3 +71,12 @@ rpassword = "7.3"
 
 
 
+
+# Discord
+twilight-gateway = "0.15"
+twilight-http = "0.15"
+twilight-model = "0.15"
+twilight-util = { version = "0.15", features = ["builder"] }
+
+# Slack
+slack-morphism = { version = "2.0", features = ["hyper", "axum"] }
