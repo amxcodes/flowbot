@@ -23,6 +23,7 @@ pub mod security;
 pub mod script;
 pub mod server;
 pub mod system;
+pub mod service;
 pub mod sessions;
 pub mod setup;
 pub mod shutdown;

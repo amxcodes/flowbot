@@ -1,0 +1,160 @@
+cargo : warning: unused import: `slack_morphism::socket_mode::*`
+At line:1 char:1
++ cargo check -p nanobot-cli 2>&1 | Out-File -Encoding ascii check_cli_ ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (warning: unused...socket_mode::*`:Str    
+ing) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  --> crates\nanobot-core\src\gateway\slack_adapter.rs:12:5
+   |
+12 | use slack_morphism::socket_mode::*;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `Context`
+ --> crates\nanobot-core\src\setup\discord.rs:1:22
+  |
+1 | use anyhow::{Result, Context};
+  |                      ^^^^^^^
+
+warning: unused import: `Context`
+ --> crates\nanobot-core\src\setup\slack.rs:1:22
+  |
+1 | use anyhow::{Result, Context};
+  |                      ^^^^^^^
+
+warning: unused import: `futures::StreamExt`
+  --> crates\nanobot-core\src\gateway\discord_adapter.rs:10:5
+   |
+10 | use futures::StreamExt;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+   --> crates\nanobot-core\src\google.rs:171:9
+    |
+171 |     let mut final_contents = contents;
+    |         ----^^^^^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` on by default
+
+warning: struct `ScoredEntry` is never constructed
+  --> crates\nanobot-core\src\memory\vector_store.rs:12:8
+   |
+12 | struct ScoredEntry {
+   |        ^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: function `print_completion_message` is never used
+   --> crates\nanobot-core\src\setup\wizard.rs:308:4
+    |
+308 | fn print_completion_message(workspace_dir: &std::path::Path) {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `nanobot-core` (lib) generated 7 warnings (run `cargo fix --lib -p 
+nanobot-core` to apply 4 suggestions)
+    Checking nanobot-cli v0.1.0 (C:\Users\AMAN 
+ANU\Desktop\amxcodes\nanobot\nanobot-rs-clean\crates\nanobot-cli)
+error[E0583]: file not found for module `service`
+  --> crates\nanobot-cli\src\main.rs:20:1
+   |
+20 | mod service;
+   | ^^^^^^^^^^^^
+   |
+   = help: to create the module `service`, create file 
+"crates\nanobot-cli\src\service.rs" or "crates\nanobot-cli\src\service\mod.rs"
+   = note: if there is a `mod service` elsewhere in the crate already, import it with 
+`use crate::...` instead
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `console`
+   --> crates\nanobot-cli\src\main.rs:318:40
+    |
+318 |                         println!("{}", console::style("Running OAuth 
+login...").bold().cyan());
+    |                                        ^^^^^^^ use of unresolved module or 
+unlinked crate `console`
+    |
+    = help: if you wanted to use a crate named `console`, use `cargo add console` to 
+add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `console`
+   --> crates\nanobot-cli\src\main.rs:326:36
+    |
+326 |                     println!("{}", console::style("Installing system 
+service...").bold().cyan());
+    |                                    ^^^^^^^ use of unresolved module or unlinked 
+crate `console`
+    |
+    = help: if you wanted to use a crate named `console`, use `cargo add console` to 
+add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `console`
+   --> crates\nanobot-cli\src\main.rs:328:40
+    |
+328 |                         println!("{}", console::style(format!("??????  Service 
+installation failed: {}", e)).yellow());
+    |                                        ^^^^^^^ use of unresolved module or 
+unlinked crate `console`
+    |
+    = help: if you wanted to use a crate named `console`, use `cargo add console` to 
+add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `console`
+   --> crates\nanobot-cli\src\main.rs:331:40
+    |
+331 |                         println!("{}", console::style("??? Service 
+installed!").green().bold());
+    |                                        ^^^^^^^ use of unresolved module or 
+unlinked crate `console`
+    |
+    = help: if you wanted to use a crate named `console`, use `cargo add console` to 
+add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `console`
+   --> crates\nanobot-cli\src\main.rs:338:36
+    |
+338 |                     println!("{}", console::style("???? Hatching into 
+TUI...").bold().cyan());
+    |                                    ^^^^^^^ use of unresolved module or unlinked 
+crate `console`
+    |
+    = help: if you wanted to use a crate named `console`, use `cargo add console` to 
+add it to your `Cargo.toml`
+
+error[E0061]: this function takes 1 argument but 0 arguments were supplied
+    --> crates\nanobot-cli\src\main.rs:340:21
+     |
+ 340 |                     run_rich_tui_chat().await?;
+     |                     ^^^^^^^^^^^^^^^^^-- argument #1 of type 
+`std::option::Option<std::string::String>` is missing
+     |
+note: function defined here
+    --> crates\nanobot-cli\src\main.rs:1074:10
+     |
+1074 | async fn run_rich_tui_chat(_provider: Option<String>) -> Result<()> {
+     |          ^^^^^^^^^^^^^^^^^ -------------------------
+help: provide the argument
+     |
+ 340 |                     run_rich_tui_chat(/* 
+std::option::Option<std::string::String> */).await?;
+     |                                       
+++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `console`
+   --> crates\nanobot-cli\src\main.rs:344:36
+    |
+344 |                     println!("{}", console::style("???? Starting 
+Gateway...").bold().cyan());
+    |                                    ^^^^^^^ use of unresolved module or unlinked 
+crate `console`
+    |
+    = help: if you wanted to use a crate named `console`, use `cargo add console` to 
+add it to your `Cargo.toml`
+
+Some errors have detailed explanations: E0061, E0433, E0583.
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `nanobot-cli` (bin "nanobot") due to 8 previous errors

@@ -1,0 +1,100 @@
+cargo :     Checking nanobot-core v0.1.0 (C:\Users\AMAN 
+ANU\Desktop\amxcodes\nanobot\nanobot-rs-clean\crates\nanobot-core)
+At line:1 char:1
++ cargo check -p nanobot-core --lib 2>&1 | Out-File -Encoding ascii che ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Checking na...s\nanobot-core):S 
+   tring) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+warning: unused import: `slack_morphism::socket_mode::*`
+  --> crates\nanobot-core\src\gateway\slack_adapter.rs:12:5
+   |
+12 | use slack_morphism::socket_mode::*;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `Context`
+ --> crates\nanobot-core\src\setup\discord.rs:1:22
+  |
+1 | use anyhow::{Result, Context};
+  |                      ^^^^^^^
+
+warning: unused import: `Context`
+ --> crates\nanobot-core\src\setup\slack.rs:1:22
+  |
+1 | use anyhow::{Result, Context};
+  |                      ^^^^^^^
+
+warning: unused variable: `ag_config`
+   --> crates\nanobot-core\src\agent\mod.rs:195:21
+    |
+195 |                 let ag_config = config.providers.antigravity.as_ref();
+    |                     ^^^^^^^^^ help: if this is intentional, prefix it with 
+an underscore: `_ag_config`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+error[E0283]: type annotations needed for 
+`slack_morphism::SlackSocketModeListenerCallbacks<_>`
+   --> crates\nanobot-core\src\gateway\slack_adapter.rs:157:13
+    |
+157 |         let socket_mode_callbacks = SlackSocketModeListenerCallbacks::new()
+    |             ^^^^^^^^^^^^^^^^^^^^^   -------------------------------- type 
+must be known at this point
+    |
+    = note: cannot satisfy `_: SlackClientHttpConnector`
+    = help: the trait `SlackClientHttpConnector` is implemented for 
+`slack_morphism::hyper_tokio::SlackClientHyperConnector<H>`
+note: required by a bound in `slack_morphism::SlackSocketModeListenerCallbacks`
+   --> C:\Users\AMAN ANU\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\sla
+ck-morphism-2.17.0\src\socket_mode\callbacks.rs:46:11
+    |
+ 44 | pub struct SlackSocketModeListenerCallbacks<SCHC>
+    |            -------------------------------- required by a bound in this 
+struct
+ 45 | where
+ 46 |     SCHC: SlackClientHttpConnector + Send + Sync,
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in 
+`SlackSocketModeListenerCallbacks`
+help: consider giving `socket_mode_callbacks` an explicit type, where the type 
+for type parameter `SCHC` is specified
+    |
+157 |         let socket_mode_callbacks: 
+slack_morphism::SlackSocketModeListenerCallbacks<SCHC> = 
+SlackSocketModeListenerCallbacks::new()
+    |                                  
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0609]: no field `content` on type 
+`std::option::Option<slack_morphism::SlackMessageContent>`
+   --> crates\nanobot-core\src\gateway\slack_adapter.rs:262:27
+    |
+262 |                          .content
+    |                           ^^^^^^^ unknown field
+    |
+    = note: available fields are: `text`, `blocks`, `attachments`, `upload`, 
+`files` ... and 2 others
+
+warning: unused import: `futures::StreamExt`
+  --> crates\nanobot-core\src\gateway\discord_adapter.rs:10:5
+   |
+10 | use futures::StreamExt;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+   --> crates\nanobot-core\src\google.rs:171:9
+    |
+171 |     let mut final_contents = contents;
+    |         ----^^^^^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` on by default
+
+Some errors have detailed explanations: E0283, E0609.
+For more information about an error, try `rustc --explain E0283`.
+warning: `nanobot-core` (lib) generated 6 warnings
+error: could not compile `nanobot-core` (lib) due to 2 previous errors; 6 
+warnings emitted

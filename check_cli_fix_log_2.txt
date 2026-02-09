@@ -1,0 +1,76 @@
+cargo :     Checking nanobot-core v0.1.0 (C:\Users\AMAN 
+ANU\Desktop\amxcodes\nanobot\nanobot-rs-clean\crates\nanobot-core)
+At line:1 char:1
++ cargo check -p nanobot-cli 2>&1 | Out-File -Encoding ascii check_cli_ ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Checking na...s\nanobot-core):S 
+   tring) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+warning: unused import: `slack_morphism::socket_mode::*`
+  --> crates\nanobot-core\src\gateway\slack_adapter.rs:12:5
+   |
+12 | use slack_morphism::socket_mode::*;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `Context`
+ --> crates\nanobot-core\src\setup\discord.rs:1:22
+  |
+1 | use anyhow::{Result, Context};
+  |                      ^^^^^^^
+
+warning: unused import: `Context`
+ --> crates\nanobot-core\src\setup\slack.rs:1:22
+  |
+1 | use anyhow::{Result, Context};
+  |                      ^^^^^^^
+
+warning: unused import: `futures::StreamExt`
+  --> crates\nanobot-core\src\gateway\discord_adapter.rs:10:5
+   |
+10 | use futures::StreamExt;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+   --> crates\nanobot-core\src\google.rs:171:9
+    |
+171 |     let mut final_contents = contents;
+    |         ----^^^^^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` on by default
+
+warning: struct `ScoredEntry` is never constructed
+  --> crates\nanobot-core\src\memory\vector_store.rs:12:8
+   |
+12 | struct ScoredEntry {
+   |        ^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: function `print_completion_message` is never used
+   --> crates\nanobot-core\src\setup\wizard.rs:308:4
+    |
+308 | fn print_completion_message(workspace_dir: &std::path::Path) {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `nanobot-core` (lib) generated 7 warnings (run `cargo fix --lib -p 
+nanobot-core` to apply 4 suggestions)
+    Checking nanobot-cli v0.1.0 (C:\Users\AMAN 
+ANU\Desktop\amxcodes\nanobot\nanobot-rs-clean\crates\nanobot-cli)
+warning: unused import: `ServiceStatus`
+   --> crates\nanobot-cli\src\main.rs:835:87
+    |
+835 |             use nanobot_core::service::{ServiceManager, ServiceResponse, 
+ServiceInfo, ServiceStatus};
+    |                                                                            
+           ^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` on by default
+
+warning: `nanobot-cli` (bin "nanobot") generated 1 warning (run `cargo fix --bin 
+"nanobot"` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.58s

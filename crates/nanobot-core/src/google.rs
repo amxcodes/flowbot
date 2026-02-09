@@ -101,22 +101,22 @@ impl CompletionModel for GoogleCompletionModel {
                      let data = event.data;
                      if data == "[DONE]" {
                          // Rig expects a Final variant to close stream properly, but empty message works too
-                         return Ok(rig::streaming::RawStreamingChoice::Message(GoogleStreamingResponse { content: "".to_string() }));
+                         return Ok(rig::streaming::RawStreamingChoice::Message("".to_string()));
                      }
                      
                      if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
                          if let Some(text) = json["candidates"][0]["content"]["parts"][0]["text"].as_str() {
-                             return Ok(rig::streaming::RawStreamingChoice::Message(GoogleStreamingResponse { content: text.to_string() }));
+                             return Ok(rig::streaming::RawStreamingChoice::Message(text.to_string()));
                          }
                      }
                      // Fallback/Ignore empty
-                      Ok(rig::streaming::RawStreamingChoice::Message(GoogleStreamingResponse { content: "".to_string() }))
+                      Ok(rig::streaming::RawStreamingChoice::Message("".to_string()))
                  },
                  Err(e) => Err(CompletionError::ProviderError(e.to_string()))
              }
         });
         
-        Ok(StreamingCompletionResponse::new(Box::pin(mapped_stream)))
+        Ok(StreamingCompletionResponse::stream(Box::pin(mapped_stream)))
     }
 }
 
@@ -128,6 +128,12 @@ pub struct GoogleStreamingResponse {
 impl rig::completion::GetTokenUsage for GoogleStreamingResponse {
     fn token_usage(&self) -> Option<rig::completion::Usage> {
         None
+    }
+}
+
+impl From<String> for GoogleStreamingResponse {
+    fn from(content: String) -> Self {
+        Self { content }
     }
 }
 

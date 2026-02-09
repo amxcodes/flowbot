@@ -41,8 +41,10 @@ pub async fn run_discord_setup_wizard() -> Result<()> {
     }
 
     // Store in environment
-    std::env::set_var("DISCORD_TOKEN", &bot_token);
-    std::env::set_var("DISCORD_APP_ID", &app_id);
+    unsafe {
+        std::env::set_var("DISCORD_TOKEN", &bot_token);
+        std::env::set_var("DISCORD_APP_ID", &app_id);
+    }
 
     println!();
     println!("{}", style("✅ Discord configured successfully!").green().bold());

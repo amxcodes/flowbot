@@ -47,8 +47,10 @@ pub async fn run_slack_setup_wizard() -> Result<()> {
     }
 
     // Store in environment
-    std::env::set_var("SLACK_BOT_TOKEN", &bot_token);
-    std::env::set_var("SLACK_APP_TOKEN", &app_token);
+    unsafe {
+        std::env::set_var("SLACK_BOT_TOKEN", &bot_token);
+        std::env::set_var("SLACK_APP_TOKEN", &app_token);
+    }
 
     println!();
     println!("{}", style("✅ Slack configured successfully!").green().bold());

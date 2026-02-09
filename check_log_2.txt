@@ -1,0 +1,126 @@
+cargo :     Checking nanobot-core v0.1.0 (C:\Users\AMAN 
+ANU\Desktop\amxcodes\nanobot\nanobot-rs-clean\crates\nanobot-core)
+At line:1 char:1
++ cargo check -p nanobot-core --lib 2>&1 | Out-File -Encoding ascii che ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Checking na...s\nanobot-core):S 
+   tring) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+warning: unused import: `slack_morphism::socket_mode::*`
+  --> crates\nanobot-core\src\gateway\slack_adapter.rs:12:5
+   |
+12 | use slack_morphism::socket_mode::*;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `Context`
+ --> crates\nanobot-core\src\setup\discord.rs:1:22
+  |
+1 | use anyhow::{Result, Context};
+  |                      ^^^^^^^
+
+warning: unused import: `Context`
+ --> crates\nanobot-core\src\setup\slack.rs:1:22
+  |
+1 | use anyhow::{Result, Context};
+  |                      ^^^^^^^
+
+error[E0308]: mismatched types
+   --> crates\nanobot-core\src\agent\mod.rs:88:57
+    |
+ 88 |                          StreamedAssistantContent::Text(content)
+    |                          ------------------------------ ^^^^^^^ expected 
+`Text`, found `StreamedAssistantContent<...>`
+    |                          |
+    |                          arguments to this enum variant are incorrect
+    |
+    = note: expected struct `rig::agent::Text`
+                 found enum `StreamedAssistantContent<GoogleStreamingResponse>`
+note: tuple variant defined here
+   --> C:\Users\AMAN ANU\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rig
+-core-0.29.0\src\streaming.rs:618:5
+    |
+618 |     Text(Text),
+    |     ^^^^
+
+warning: unused variable: `ag_config`
+   --> crates\nanobot-core\src\agent\mod.rs:191:21
+    |
+191 |                 let ag_config = config.providers.antigravity.as_ref();
+    |                     ^^^^^^^^^ help: if this is intentional, prefix it with 
+an underscore: `_ag_config`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+error[E0308]: mismatched types
+   --> crates\nanobot-core\src\gateway\slack_adapter.rs:192:35
+    |
+192 |                   .with_push_events(move |event, _client, _states| {
+    |  __________________----------------_^
+    | |                  |
+    | |                  arguments to this method are incorrect
+193 | |                     let handler = handler.clone();
+194 | |                     async move {
+195 | |                         if let Err(e) = 
+handler.handle_event(SlackPushEvent::EventCallback(event)).await {
+...   |
+200 | |                 })
+    | |_________________^ expected fn pointer, found closure
+    |
+    = note: expected fn pointer `fn(SlackPushEventCallback, 
+Arc<SlackClient<...>>, ...) -> ...`
+                  found closure 
+`{closure@crates\nanobot-core\src\gateway\slack_adapter.rs:192:35: 192:65}`
+note: closures can only be coerced to `fn` types if they do not capture any 
+variables
+   --> crates\nanobot-core\src\gateway\slack_adapter.rs:193:35
+    |
+193 |                     let handler = handler.clone();
+    |                                   ^^^^^^^ `handler` captured here
+note: method defined here
+   --> C:\Users\AMAN ANU\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\sla
+ck-morphism-2.17.0\src\socket_mode\callbacks.rs:152:12
+    |
+152 |     pub fn with_push_events<F>(
+    |            ^^^^^^^^^^^^^^^^
+    = note: the full name for the type has been written to 'C:\Users\AMAN ANU\Des
+ktop\amxcodes\nanobot\nanobot-rs-clean\target\debug\deps\nanobot_core-112743a614b
+07135.long-type-17057086240480118663.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: the trait bound `slack_morphism::SlackMessageContent: 
+std::default::Default` is not satisfied
+   --> crates\nanobot-core\src\gateway\slack_adapter.rs:256:27
+    |
+256 |                          .unwrap_or_default()
+    |                           ^^^^^^^^^^^^^^^^^ the trait 
+`std::default::Default` is not implemented for 
+`slack_morphism::SlackMessageContent`
+    |
+note: required by a bound in `std::option::Option::<T>::unwrap_or_default`
+   --> 
+/rustc/1159e78c4747b02ef996e55082b704c09b970588\library\core\src\option.rs:1086:5
+
+warning: unused import: `futures::StreamExt`
+  --> crates\nanobot-core\src\gateway\discord_adapter.rs:10:5
+   |
+10 | use futures::StreamExt;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+   --> crates\nanobot-core\src\google.rs:171:9
+    |
+171 |     let mut final_contents = contents;
+    |         ----^^^^^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` on by default
+
+Some errors have detailed explanations: E0277, E0308.
+For more information about an error, try `rustc --explain E0277`.
+warning: `nanobot-core` (lib) generated 6 warnings
+error: could not compile `nanobot-core` (lib) due to 3 previous errors; 6 
+warnings emitted

@@ -85,7 +85,11 @@ impl AgentProvider {
                  let stream = m.stream(request).await?;
                  let mapped = stream.map(|res| {
                      res.map(|content| {
-                         StreamedAssistantContent::Text(content.content)
+                         match content {
+                             StreamedAssistantContent::Text(t) => StreamedAssistantContent::Text(t),
+                             StreamedAssistantContent::Final(f) => StreamedAssistantContent::Final(f.content),
+                             _ => StreamedAssistantContent::text(""),
+                         }
                      })
                  });
                  Ok(Box::pin(mapped))
@@ -188,7 +192,7 @@ impl AgentLoop {
         
         match default {
             "antigravity" => {
-                let ag_config = config.providers.antigravity.as_ref();
+                let _ag_config = config.providers.antigravity.as_ref();
                 
                 // Resolution logic: 
                 // Antigravity now strictly uses OAuth via TokenManager (handled inside client)

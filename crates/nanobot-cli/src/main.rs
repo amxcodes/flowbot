@@ -17,7 +17,7 @@ use nanobot_core::{
 use nanobot_core::gateway::telegram_adapter as telegram;
 
 // Local modules
-mod service;
+// removed mod service;
 mod web;
 
 #[derive(Parser, Debug)]
@@ -324,7 +324,7 @@ async fn main() -> Result<()> {
                 if result.should_install_service {
                     println!();
                     println!("{}", console::style("Installing system service...").bold().cyan());
-                    if let Err(e) = service::install_service().await {
+                    if let Err(e) = nanobot_core::service::ServiceManager::new().install() {
                         println!("{}", console::style(format!("⚠️  Service installation failed: {}", e)).yellow());
                         println!("You can install it later with: nanobot service install");
                     } else {
@@ -337,7 +337,7 @@ async fn main() -> Result<()> {
                     println!();
                     println!("{}", console::style("🚀 Hatching into TUI...").bold().cyan());
                     println!();
-                    run_rich_tui_chat().await?;
+                    run_rich_tui_chat(None).await?;
                 } else if result.should_start_gateway {
                     // Launch gateway instead of TUI
                     println!();
@@ -832,7 +832,7 @@ async fn main() -> Result<()> {
             web::run_server(port, agent_tx).await?;
         }
         Commands::Service { action } => {
-            use service::{ServiceManager, ServiceResponse, ServiceInfo};
+            use nanobot_core::service::{ServiceManager, ServiceResponse, ServiceInfo};
             
             let manager = ServiceManager::new();
             
@@ -1045,7 +1045,7 @@ async fn main() -> Result<()> {
                                 error: None,
                                 service: Some(ServiceInfo {
                                     label: if cfg!(target_os = "linux") { "systemd" } else { "Task Scheduler" }.to_string(),
-                                    loaded: runtime.status == service::ServiceStatus::Running,
+                                    loaded: runtime.status == nanobot_core::service::ServiceStatus::Running,
                                     runtime: Some(runtime),
                                 }),
                             };
