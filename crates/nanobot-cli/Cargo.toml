@@ -33,3 +33,5 @@ walkdir = { workspace = true }
 axum = { workspace = true }
 rust-embed = { workspace = true }
 console.workspace = true
+rpassword = { workspace = true }
+jsonwebtoken = { workspace = true }

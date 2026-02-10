@@ -1,4 +1,4 @@
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -77,30 +77,30 @@ impl AgentManifest {
     pub fn load(path: &std::path::Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)
             .context(format!("Failed to read manifest: {}", path.display()))?;
-        
-        let manifest: AgentManifest= toml::from_str(&content)
-            .context("Failed to parse TOML manifest")?;
-        
+
+        let manifest: AgentManifest =
+            toml::from_str(&content).context("Failed to parse TOML manifest")?;
+
         Ok(manifest)
     }
-    
+
     /// Validate manifest
     pub fn validate(&self) -> Result<()> {
         if self.agent.name.is_empty() {
             anyhow::bail!("Agent name cannot be empty");
         }
-        
+
         if self.identity.system_prompt.is_empty() {
             anyhow::bail!("System prompt cannot be empty");
         }
-        
+
         // Check for conflicting tool allow/deny
         for tool in &self.tools.allow {
             if self.tools.deny.contains(tool) {
                 anyhow::bail!("Tool '{}' appears in both allow and deny lists", tool);
             }
         }
-        
+
         Ok(())
     }
 }
@@ -108,7 +108,7 @@ impl AgentManifest {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_parse_manifest() {
         let toml = r#"
@@ -131,7 +131,7 @@ allow = ["web_search"]
 backend = "sqlite"
 namespace = "test"
 "#;
-        
+
         let manifest: AgentManifest = toml::from_str(toml).unwrap();
         assert_eq!(manifest.agent.name, "test_bot");
         assert_eq!(manifest.channels.len(), 1);

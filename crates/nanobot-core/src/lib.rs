@@ -4,6 +4,7 @@ pub mod config;
 pub mod console;
 pub mod cron;
 pub mod doctor;
+pub mod events;
 pub mod gateway;
 pub mod google;
 pub mod llm;
@@ -30,5 +31,6 @@ pub mod shutdown;
 pub mod token_manager;
 pub mod tools;
 pub mod websocket;
+pub mod variant_discovery;
 // Re-exports for easier access
 pub use agent::AgentLoop;

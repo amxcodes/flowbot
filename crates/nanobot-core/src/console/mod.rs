@@ -71,7 +71,7 @@ impl ConsoleREPL {
   /state           - Show server status (uptime, agents, tools)
   /tools           - List all registered tools
   /health          - Check server health
-  /eval <tool>     - Execute a tool (planned)
+  /eval <tool>     - Execute a tool via admin API
   /history         - Show command history
   /exit, /quit     - Exit the console
         "#.to_string()
@@ -102,8 +102,48 @@ impl ConsoleREPL {
         }
     }
     
-    async fn eval_tool(&self, _cmd: &str) -> Result<String> {
-        Ok("⚠️  Tool evaluation not yet implemented.".to_string())
+    async fn eval_tool(&self, cmd: &str) -> Result<String> {
+        let rest = cmd.trim_start_matches("/eval").trim();
+        if rest.is_empty() {
+            return Ok("Usage: /eval <tool> {json-args}".to_string());
+        }
+
+        let mut parts = rest.splitn(2, ' ');
+        let tool = parts.next().unwrap_or("");
+        if tool.is_empty() {
+            return Ok("Usage: /eval <tool> {json-args}".to_string());
+        }
+
+        let args = if let Some(raw) = parts.next() {
+            if raw.trim().is_empty() {
+                None
+            } else {
+                Some(serde_json::from_str::<Value>(raw)?)
+            }
+        } else {
+            None
+        };
+
+        let url = format!("{}/eval", self.admin_url);
+        let payload = serde_json::json!({
+            "tool": tool,
+            "args": args,
+        });
+
+        let mut request = self.http_client.post(&url).json(&payload);
+        let token = std::env::var("NANOBOT_ADMIN_TOKEN")
+            .ok()
+            .or_else(|| crate::security::read_admin_token().ok().flatten());
+        if let Some(token) = token {
+            request = request.header("Authorization", format!("Bearer {}", token));
+        }
+
+        let response: Value = request.send().await?.json().await?;
+        let output = response
+            .get("output")
+            .and_then(|v| v.as_str())
+            .unwrap_or("(no output)");
+        Ok(output.to_string())
     }
     
     fn show_history(&self) -> String {

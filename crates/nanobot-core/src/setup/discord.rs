@@ -1,4 +1,4 @@
-use anyhow::{Result, Context};
+use anyhow::Result;
 use console::style;
 use dialoguer::{Input, theme::ColorfulTheme};
 

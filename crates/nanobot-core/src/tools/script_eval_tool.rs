@@ -101,7 +101,7 @@ mod tests {
     async fn test_script_eval_function() -> Result<()> {
         let tool = ScriptEvalTool;
         let args = serde_json::json!({
-            "script": "fn greet(name) { 'Hello, ' + name + '!' }",
+            "script": "fn greet(name) { \"Hello, \" + name + \"!\" }",
             "function": "greet",
             "args": ["World"]
         });

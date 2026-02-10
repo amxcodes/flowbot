@@ -3,19 +3,19 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-pub mod agent_manifest;
 pub mod agent_loader;
+pub mod agent_manifest;
 pub mod encrypted_storage;
 
-pub use agent_manifest::AgentManifest;
 pub use agent_loader::AgentLoader;
+pub use agent_manifest::AgentManifest;
 pub use encrypted_storage::EncryptedSecrets;
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum InteractionPolicy {
     Interactive,      // Prompt user for dangerous actions (default)
-    HeadlessDeny,    // Auto-deny dangerous actions in non-interactive mode
+    HeadlessDeny,     // Auto-deny dangerous actions in non-interactive mode
     HeadlessAllowLog, // Auto-allow but log to audit file
 }
 
@@ -41,10 +41,40 @@ pub struct Config {
     pub browser: Option<BrowserConfig>,
     #[serde(default = "default_context_token_limit")]
     pub context_token_limit: usize,
+    #[serde(default)]
+    pub session: SessionConfig,
 }
 
 fn default_context_token_limit() -> usize {
     32_000
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DmScope {
+    Main,
+    PerPeer,
+    PerChannelPeer,
+}
+
+impl Default for DmScope {
+    fn default() -> Self {
+        Self::Main
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SessionConfig {
+    #[serde(default)]
+    pub dm_scope: DmScope,
+}
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self {
+            dm_scope: DmScope::Main,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

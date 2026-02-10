@@ -13,12 +13,13 @@ pub struct TelegramConfirmationAdapter {
     callback_rx: Mutex<mpsc::Receiver<CallbackResponse>>,
     /// Channel to send pending requests
     pending_tx: mpsc::Sender<String>, // request_id -> for tracking
+    channel: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct CallbackResponse {
-    request_id: String,
-    allowed: bool,
+    pub request_id: String,
+    pub allowed: bool,
 }
 
 impl TelegramConfirmationAdapter {
@@ -27,12 +28,14 @@ impl TelegramConfirmationAdapter {
         chat_id: i64,
         callback_rx: mpsc::Receiver<CallbackResponse>,
         pending_tx: mpsc::Sender<String>,
+        channel: String,
     ) -> Self {
         Self {
             bot_token,
             chat_id,
             callback_rx: Mutex::new(callback_rx),
             pending_tx,
+            channel,
         }
     }
 
@@ -138,6 +141,10 @@ impl ConfirmationAdapter for TelegramConfirmationAdapter {
 
     fn name(&self) -> &str {
         "Telegram"
+    }
+
+    fn channel(&self) -> Option<&str> {
+        Some(&self.channel)
     }
 
     async fn is_available(&self) -> bool {

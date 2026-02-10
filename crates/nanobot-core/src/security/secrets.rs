@@ -2,12 +2,12 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
+use base64::{engine::general_purpose, Engine as _};
 use pbkdf2::pbkdf2_hmac;
 use rand::RngCore;
 use sha2::Sha256;
 use std::path::PathBuf;
-use base64::{Engine as _, engine::general_purpose};
 
 const PBKDF2_ITERATIONS: u32 = 100_000;
 const SALT_SIZE: usize = 32;
@@ -28,12 +28,7 @@ impl SecretManager {
 
         // Derive 256-bit key from password
         let mut key = [0u8; 32];
-        pbkdf2_hmac::<Sha256>(
-            password.as_bytes(),
-            salt,
-            PBKDF2_ITERATIONS,
-            &mut key,
-        );
+        pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, PBKDF2_ITERATIONS, &mut key);
 
         let cipher = Aes256Gcm::new_from_slice(&key)
             .map_err(|e| anyhow!("Failed to create cipher: {}", e))?;
@@ -115,12 +110,12 @@ impl SecretManager {
         } else {
             // Create new salt
             let salt = Self::generate_salt();
-            
+
             // Ensure parent directory exists
             if let Some(parent) = salt_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            
+
             std::fs::write(&salt_path, &salt)?;
             Ok(salt)
         }
@@ -140,10 +135,10 @@ impl SecretManager {
             use std::io::{self, Write};
             print!("Enter master password: ");
             io::stdout().flush()?;
-            
+
             let password = rpassword::read_password()
                 .map_err(|e| anyhow!("Failed to read password: {}", e))?;
-            
+
             let salt = Self::load_or_create_salt()?;
             Self::new(&password, &salt)
         }

@@ -11,6 +11,7 @@ pub struct GatewayConfirmationAdapter {
     request_tx: mpsc::Sender<GatewayConfirmationEvent>,
     /// Channel to receive responses from the gateway (wrapped in Mutex for interior mutability)
     response_rx: Mutex<mpsc::Receiver<GatewayConfirmationEvent>>,
+    channel: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,10 +37,12 @@ impl GatewayConfirmationAdapter {
     pub fn new(
         request_tx: mpsc::Sender<GatewayConfirmationEvent>,
         response_rx: mpsc::Receiver<GatewayConfirmationEvent>,
+        channel: String,
     ) -> Self {
         Self {
             request_tx,
             response_rx: Mutex::new(response_rx),
+            channel,
         }
     }
 }
@@ -96,6 +99,10 @@ impl ConfirmationAdapter for GatewayConfirmationAdapter {
         "Gateway"
     }
 
+    fn channel(&self) -> Option<&str> {
+        Some(&self.channel)
+    }
+
     async fn is_available(&self) -> bool {
         // Check if channels are open (basic availability check)
         !self.request_tx.is_closed()
@@ -110,7 +117,7 @@ mod tests {
     async fn test_gateway_adapter_creation() {
         let (tx, _rx) = mpsc::channel(10);
         let (_tx2, rx2) = mpsc::channel(10);
-        let adapter = GatewayConfirmationAdapter::new(tx, rx2);
+        let adapter = GatewayConfirmationAdapter::new(tx, rx2, "web:test".to_string());
         assert_eq!(adapter.name(), "Gateway");
         assert!(adapter.is_available().await);
     }

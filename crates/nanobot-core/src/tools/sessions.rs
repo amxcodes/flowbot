@@ -38,6 +38,7 @@ pub async fn execute_sessions_tool(
                 .to_string();
 
             let label = tool_call["label"].as_str().map(|s| s.to_string());
+            let model = tool_call["model"].as_str().map(|s| s.to_string());
 
             let cleanup = match tool_call["cleanup"].as_str() {
                 Some("delete") => CleanupPolicy::Delete,
@@ -52,7 +53,7 @@ pub async fn execute_sessions_tool(
                 .to_string();
 
             let (session, task_obj) = agent_manager
-                .spawn_subagent(parent_session_id, task, label, cleanup)
+                .spawn_subagent(parent_session_id, task, label, cleanup, model)
                 .await?;
 
             Ok(serde_json::to_string(&json!({

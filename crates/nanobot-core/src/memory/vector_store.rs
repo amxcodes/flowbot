@@ -8,41 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::cmp::Ordering;
 use tracing::{info, instrument};
 
-// Vector Entry without payload for scoring
-struct ScoredEntry {
-    id: String,
-    score: f32,
-}
-
-impl PartialEq for ScoredEntry {
-    fn eq(&self, other: &Self) -> bool {
-        self.score == other.score
-    }
-}
-
-impl Eq for ScoredEntry {}
-
-// Min-heap behavior: Requesting Smallest element gives lowest score.
-// We want to keep Top K Highest scores.
-impl Ord for ScoredEntry {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // Reverse ordering for Min-Heap of scores? 
-        // Standard BinaryHeap is Max-Heap. 
-        // We want to keep K valid items.
-        // If we use Max-Heap, potential removal is highest? No.
-        // Let's just collect all and sort for simplicity first, or use simple vector and sort partial.
-        // For N < 100k, collecting (Score, ID) is cheap (String + f32).
-        // 100k * 40 bytes = 4MB RAM. Negligible.
-        // So we can stream, collect scores, sort, then fetch content.
-        other.score.partial_cmp(&self.score).unwrap_or(Ordering::Equal)
-    }
-}
-
-impl PartialOrd for ScoredEntry {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
+// Scoring helpers were removed; streaming sort is used directly.
 
 // Complete Entry for compatibility
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -125,7 +91,7 @@ impl MemoryManager {
         metadata: HashMap<String, String>,
         tenant_id: Option<&str>,
     ) -> Result<()> {
-        let tenant_id = tenant_id.unwrap_or("default");
+        let tenant_id = tenant_id.ok_or_else(|| anyhow::anyhow!("tenant_id is required"))?;
         let embeddings = self.provider.embed(vec![content]).await?;
         let vector = embeddings[0].clone();
         self.add_document_with_vector(content, metadata, &vector, tenant_id).await
@@ -176,7 +142,7 @@ impl MemoryManager {
         tenant_id: Option<&str>,
         batch_size: Option<usize>,
     ) -> Result<usize> {
-        let tenant_id = tenant_id.unwrap_or("default");
+        let tenant_id = tenant_id.ok_or_else(|| anyhow::anyhow!("tenant_id is required"))?;
         if documents.is_empty() { return Ok(0); }
         let batch_size = batch_size.unwrap_or(20);
         let mut added = 0;
@@ -194,22 +160,72 @@ impl MemoryManager {
 
     pub fn remove_document_by_path(&self, path: &str, tenant_id: Option<&str>) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        let tid = tenant_id.unwrap_or("default");
+        let tid = tenant_id.ok_or_else(|| anyhow::anyhow!("tenant_id is required"))?;
         conn.execute("DELETE FROM documents WHERE path = ?1 AND tenant_id = ?2", params![path, tid])?;
         conn.execute("DELETE FROM documents_fts WHERE path = ?1 AND tenant_id = ?2", params![path, tid])?;
         Ok(())
     }
     
     pub async fn update_document(&self, path: &str, content: &str, tenant_id: Option<&str>) -> Result<()> {
-         self.remove_document_by_path(path, tenant_id)?;
+         let tenant_id = tenant_id.ok_or_else(|| anyhow::anyhow!("tenant_id is required"))?;
+         let embeddings = self.provider.embed(vec![content]).await?;
+         let vector = embeddings[0].clone();
          let mut metadata = HashMap::new();
          metadata.insert("path".to_string(), path.to_string());
-         self.add_document(content, metadata, tenant_id).await
+         self.update_document_with_vector(path, content, metadata, &vector, tenant_id).await
+    }
+
+    async fn update_document_with_vector(
+        &self,
+        path: &str,
+        content: &str,
+        metadata: HashMap<String, String>,
+        vector: &[f32],
+        tenant_id: &str,
+    ) -> Result<()> {
+        let metadata_json = serde_json::to_string(&metadata)?;
+        let vector_blob = serde_json::to_vec(vector)?;
+        let now = chrono::Utc::now().timestamp();
+
+        let conn = self.conn.clone();
+        let path = path.to_string();
+        let content = content.to_string();
+        let tid = tenant_id.to_string();
+
+        tokio::task::spawn_blocking(move || {
+            let mut conn = conn.lock().unwrap();
+            let tx = conn.transaction()?;
+
+            tx.execute(
+                "DELETE FROM documents WHERE path = ?1 AND tenant_id = ?2",
+                params![path, tid],
+            )?;
+            tx.execute(
+                "DELETE FROM documents_fts WHERE path = ?1 AND tenant_id = ?2",
+                params![path, tid],
+            )?;
+
+            let id = uuid::Uuid::new_v4().to_string();
+            tx.execute(
+                "INSERT INTO documents (id, path, content, metadata, vector, tenant_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![id, path, content, metadata_json, vector_blob, tid, now, now],
+            )?;
+            tx.execute(
+                "INSERT INTO documents_fts (content, path, tenant_id) VALUES (?1, ?2, ?3)",
+                params![content, path, tid],
+            )?;
+
+            tx.commit()?;
+            Ok::<_, anyhow::Error>(())
+        }).await??;
+
+        Ok(())
     }
 
     #[instrument(skip(self))]
     pub async fn search(&self, query: &str, limit: usize, tenant_id: Option<&str>) -> Result<Vec<(f32, VectorEntry)>> {
-        let tenant_id = tenant_id.unwrap_or("default");
+        let tenant_id = tenant_id.ok_or_else(|| anyhow::anyhow!("tenant_id is required"))?;
         
         // 1. Embed Query
         let query_embeddings = self.provider.embed(vec![query]).await?;

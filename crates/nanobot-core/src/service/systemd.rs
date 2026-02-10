@@ -15,10 +15,9 @@ fn get_service_dir() -> Result<PathBuf> {
         .join(".config")
         .join("systemd")
         .join("user");
-    
-    fs::create_dir_all(&service_dir)
-        .context("Failed to create systemd user service directory")?;
-    
+
+    fs::create_dir_all(&service_dir).context("Failed to create systemd user service directory")?;
+
     Ok(service_dir)
 }
 
@@ -60,32 +59,34 @@ pub fn install() -> Result<()> {
     let exe_path_str = exe_path
         .to_str()
         .context("Executable path contains invalid UTF-8")?;
-    
+
     let working_dir = std::env::current_dir()
         .context("Failed to get current directory")?
         .to_str()
         .context("Working directory contains invalid UTF-8")?
         .to_string();
-    
+
     let service_content = generate_service_unit(exe_path_str, &working_dir);
     let service_file = get_service_file()?;
-    
-    fs::write(&service_file, service_content)
-        .context("Failed to write service file")?;
-    
+
+    fs::write(&service_file, service_content).context("Failed to write service file")?;
+
     println!("✅ Service file created: {}", service_file.display());
     println!();
     println!("Reloading systemd daemon...");
-    
+
     let output = Command::new("systemctl")
         .args(["--user", "daemon-reload"])
         .output()
         .context("Failed to reload systemd daemon")?;
-    
+
     if !output.status.success() {
-        anyhow::bail!("Failed to reload systemd daemon: {}", String::from_utf8_lossy(&output.stderr));
+        anyhow::bail!(
+            "Failed to reload systemd daemon: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
-    
+
     println!("✅ Systemd daemon reloaded");
     println!();
     println!("Service installed successfully!");
@@ -93,43 +94,45 @@ pub fn install() -> Result<()> {
     println!("  nanobot service start");
     println!("To enable auto-start on boot:");
     println!("  systemctl --user enable {}", SERVICE_NAME);
-    
+
     Ok(())
 }
 
 /// Uninstall the systemd service
 pub fn uninstall() -> Result<()> {
     let service_file = get_service_file()?;
-    
+
     if !service_file.exists() {
         println!("Service not installed");
         return Ok(());
     }
-    
+
     // Stop the service first
     let _ = stop();
-    
+
     // Disable the service
     let _ = Command::new("systemctl")
         .args(["--user", "disable", SERVICE_NAME])
         .output();
-    
+
     // Remove the service file
-    fs::remove_file(&service_file)
-        .context("Failed to remove service file")?;
-    
+    fs::remove_file(&service_file).context("Failed to remove service file")?;
+
     // Reload daemon
     let output = Command::new("systemctl")
         .args(["--user", "daemon-reload"])
         .output()
         .context("Failed to reload systemd daemon")?;
-    
+
     if !output.status.success() {
-        anyhow::bail!("Failed to reload systemd daemon: {}", String::from_utf8_lossy(&output.stderr));
+        anyhow::bail!(
+            "Failed to reload systemd daemon: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
-    
+
     println!("✅ Service uninstalled successfully");
-    
+
     Ok(())
 }
 
@@ -139,11 +142,14 @@ pub fn start() -> Result<()> {
         .args(["--user", "start", SERVICE_NAME])
         .output()
         .context("Failed to start service")?;
-    
+
     if !output.status.success() {
-        anyhow::bail!("Failed to start service: {}", String::from_utf8_lossy(&output.stderr));
+        anyhow::bail!(
+            "Failed to start service: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
-    
+
     println!("✅ Service started");
     Ok(())
 }
@@ -154,11 +160,14 @@ pub fn stop() -> Result<()> {
         .args(["--user", "stop", SERVICE_NAME])
         .output()
         .context("Failed to stop service")?;
-    
+
     if !output.status.success() {
-        anyhow::bail!("Failed to stop service: {}", String::from_utf8_lossy(&output.stderr));
+        anyhow::bail!(
+            "Failed to stop service: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
-    
+
     println!("✅ Service stopped");
     Ok(())
 }
@@ -169,11 +178,14 @@ pub fn restart() -> Result<()> {
         .args(["--user", "restart", SERVICE_NAME])
         .output()
         .context("Failed to restart service")?;
-    
+
     if !output.status.success() {
-        anyhow::bail!("Failed to restart service: {}", String::from_utf8_lossy(&output.stderr));
+        anyhow::bail!(
+            "Failed to restart service: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
-    
+
     println!("✅ Service restarted");
     Ok(())
 }
@@ -184,9 +196,9 @@ pub fn status() -> Result<ServiceRuntime> {
         .args(["--user", "status", SERVICE_NAME])
         .output()
         .context("Failed to get service status")?;
-    
+
     let stdout = String::from_utf8_lossy(&output.stdout);
-    
+
     // Parse systemd status output
     let status = if stdout.contains("Active: active (running)") {
         ServiceStatus::Running
@@ -195,7 +207,7 @@ pub fn status() -> Result<ServiceRuntime> {
     } else {
         ServiceStatus::Unknown
     };
-    
+
     // Try to extract PID
     let pid = stdout
         .lines()
@@ -205,7 +217,7 @@ pub fn status() -> Result<ServiceRuntime> {
                 .nth(2)
                 .and_then(|s| s.parse::<u32>().ok())
         });
-    
+
     Ok(ServiceRuntime {
         status,
         pid,

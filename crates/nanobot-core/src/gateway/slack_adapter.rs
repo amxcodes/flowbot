@@ -5,17 +5,18 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use async_trait::async_trait;
 use std::sync::Arc;
-use super::adapter::{ChannelAdapter, ChannelMessage};
+use super::adapter::{build_session_id, ChannelAdapter, ChannelMessage};
 use super::registry::ChannelRegistry;
 
 use slack_morphism::prelude::*;
-use slack_morphism::socket_mode::*;
 
 /// Slack bot configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SlackConfig {
     pub bot_token: String,      // xoxb-...
     pub app_token: Option<String>,      // xapp-... (Required for Socket Mode)
+    #[serde(default)]
+    pub dm_scope: crate::config::DmScope,
 }
 
 /// Slack bot instance using Gateway Registry pattern
@@ -24,6 +25,9 @@ pub struct SlackBot {
     agent_tx: mpsc::Sender<crate::agent::AgentMessage>,
     registry: Arc<ChannelRegistry>,
     client: Arc<SlackClient<SlackClientHyperHttpsConnector>>,
+    confirmation_service: Arc<tokio::sync::Mutex<crate::tools::ConfirmationService>>,
+    confirmation_txs: Arc<tokio::sync::Mutex<std::collections::HashMap<String, mpsc::Sender<crate::tools::ChannelConfirmationResponse>>>>,
+    confirmation_ready: Arc<tokio::sync::Mutex<std::collections::HashSet<String>>>,
 }
 
 impl SlackBot {
@@ -32,6 +36,7 @@ impl SlackBot {
         config: SlackConfig,
         agent_tx: mpsc::Sender<crate::agent::AgentMessage>,
         registry: Arc<ChannelRegistry>,
+        confirmation_service: Arc<tokio::sync::Mutex<crate::tools::ConfirmationService>>,
     ) -> Self {
         let client = Arc::new(SlackClient::new(SlackClientHyperConnector::new().unwrap()));
         
@@ -40,6 +45,9 @@ impl SlackBot {
             agent_tx,
             registry,
             client,
+            confirmation_service,
+            confirmation_txs: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            confirmation_ready: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
         }
     }
 
@@ -52,7 +60,7 @@ impl SlackBot {
 
         // 1. Create Inbox and register with Gateway Registry
         let (inbox_tx, mut _inbox_rx) = mpsc::channel::<ChannelMessage>(100);
-        registry.register("slack", inbox_tx).await;
+        registry.register("slack", inbox_tx.clone()).await;
         tracing::info!("✅ Slack adapter registered");
 
         // 2. Start Socket Mode Listener
@@ -70,6 +78,10 @@ impl SlackBot {
             client: self.client.clone(),
             config: self.config.clone(),
             agent_tx: self.agent_tx.clone(),
+            confirmation_service: self.confirmation_service.clone(),
+            confirmation_txs: self.confirmation_txs.clone(),
+            confirmation_ready: self.confirmation_ready.clone(),
+            confirmation_outbound_tx: inbox_tx.clone(),
         });
         
         let listener_environment = Arc::new(
@@ -99,18 +111,45 @@ impl SlackBot {
                 })
         );
         
-        listener.listen_for(&app_token).await?;
+        // 3. Spawn Listener in background
+        tokio::spawn(async move {
+            if let Err(e) = listener.listen_for(&app_token).await {
+                tracing::error!("Slack listener error: {:?}", e);
+            }
+        });
 
-        // 3. Outbound Loop
-        // Note: listener.listen_for blocks? docs say it does.
-        // So we need to spawn the listener or the outbound loop.
-        // Spawning listener seems better.
+        // 4. Outbound Loop (Keep main task alive or just return if run is spawned?)
+        // The Gateway usually awaits run(), so we should probably await the inbox loop here
+        // or just return and let the gateway handle it.
+        // But `run` consumes `self`, so we need to keep the inbox receiver alive.
         
-        // Wait, the library architecture:
-        // listen_for runs the loop.
-        // So we should spawn it.
+        // Actually, the ChannelRegistry holds the Sender. The Inbox Rx needs to be processed.
+        // We set up a specialized inbox handler in `run`?
+        // Wait, `registry.register` takes `inbox_tx`.
+        // Who reads `inbox_rx`?
+        // In Discord adapter: `while let Some(msg) = inbox_rx.recv().await ...`
+        // We need that here too.
+
+        tracing::info!("📤 Slack Outbound Actor started");
         
-        // TODO: Spawn listener in separate task
+        let client = self.client.clone();
+        
+        // Process outbound messages
+        while let Some(msg) = _inbox_rx.recv().await {
+             let channel_id = msg.user_id.replace("slack:", "");
+             // We need a token for the session
+             let token = SlackApiToken::new(self.config.bot_token.clone().into());
+             let session = client.open_session(&token);
+
+             let post_chat_req = SlackApiChatPostMessageRequest::new(
+                channel_id.into(),
+                SlackMessageContent::new().with_text(msg.content.into())
+            );
+
+            if let Err(e) = session.chat_post_message(&post_chat_req).await {
+                tracing::error!("Failed to send Slack message: {:?}", e);
+            }
+        }
         
         Ok(())
     }
@@ -121,6 +160,10 @@ struct SlackHandler {
     client: Arc<SlackClient<SlackClientHyperHttpsConnector>>,
     config: SlackConfig,
     agent_tx: mpsc::Sender<crate::agent::AgentMessage>,
+    confirmation_service: Arc<tokio::sync::Mutex<crate::tools::ConfirmationService>>,
+    confirmation_txs: Arc<tokio::sync::Mutex<std::collections::HashMap<String, mpsc::Sender<crate::tools::ChannelConfirmationResponse>>>>,
+    confirmation_ready: Arc<tokio::sync::Mutex<std::collections::HashSet<String>>>,
+    confirmation_outbound_tx: mpsc::Sender<ChannelMessage>,
 }
 
 impl SlackHandler {
@@ -148,24 +191,94 @@ impl SlackHandler {
                          return Ok(());
                      }
 
-                     let channel_id = msg_event.origin.channel.ok_or(anyhow::anyhow!("No channel ID"))?.to_string();
-                     let _user_id = msg_event.sender.user.ok_or(anyhow::anyhow!("No user ID"))?.to_string();
+                      let channel_id = msg_event
+                          .origin
+                          .channel
+                          .as_ref()
+                          .ok_or(anyhow::anyhow!("No channel ID"))?
+                          .to_string();
+                      let user_id = msg_event
+                          .sender
+                          .user
+                          .as_ref()
+                          .ok_or(anyhow::anyhow!("No user ID"))?
+                          .to_string();
                      let text = msg_event
                          .content
                          .as_ref()
                          .and_then(|c| c.text.clone())
                          .unwrap_or_default();
 
-                     if text.is_empty() { return Ok(()); }
+                      if text.is_empty() { return Ok(()); }
 
-                     // Pairing logic omitted for brevity in handler, essential for auth
-                     // ...
+                      self.ensure_confirmation_adapter(&channel_id).await;
+
+                      if let Some((allowed, request_id)) = parse_confirmation_response(&text) {
+                          let tx = {
+                              let txs = self.confirmation_txs.lock().await;
+                              txs.get(&channel_id).cloned()
+                          };
+
+                          if let Some(sender) = tx {
+                              let _ = sender
+                                  .send(crate::tools::ChannelConfirmationResponse { request_id, allowed })
+                                  .await;
+                              let _ = self.post_message(&channel_id, "Confirmation received.").await;
+                          } else {
+                              let _ = self.post_message(&channel_id, "No pending confirmation.").await;
+                          }
+                          return Ok(());
+                      }
+
+                      match crate::pairing::is_authorized("slack", &user_id).await {
+                          Ok(authorized) => {
+                              if !authorized {
+                                  match crate::pairing::get_user_code("slack", &user_id).await {
+                                      Ok(Some(code)) => {
+                                          self.post_message(&channel_id, &format!("Pending authorization. Code: {}", code)).await?;
+                                      }
+                                      Ok(None) => {
+                                          if let Ok(code) = crate::pairing::create_pairing_request("slack", user_id.clone(), None).await {
+                                              self.post_message(&channel_id, &format!("Authorization Code: {}", code)).await?;
+                                          }
+                                      }
+                                      _ => {}
+                                  }
+                                  return Ok(());
+                              }
+                          }
+                          Err(_) => return Ok(()),
+                      }
+
+                      if let Some(token) = text.strip_prefix("/set_admin_token ") {
+                          let token = token.trim();
+                          if token.is_empty() {
+                              let _ = self.post_message(&channel_id, "Token cannot be empty").await;
+                              return Ok(());
+                          }
+                          if let Err(e) = crate::security::write_admin_token(token) {
+                              let _ = self
+                                  .post_message(&channel_id, &format!("Failed to save token: {}", e))
+                                  .await;
+                              return Ok(());
+                          }
+                          let _ = self.post_message(&channel_id, "Admin token saved").await;
+                          return Ok(());
+                      }
                      
                      // Forward to AgentLoop
                     let (response_tx, mut response_rx) = mpsc::channel(100);
+                      let is_dm = is_slack_dm(&msg_event, &channel_id);
+                      let session_id = build_session_id(
+                          "slack",
+                          &channel_id,
+                          &user_id,
+                          self.config.dm_scope,
+                          is_dm,
+                      );
                     let agent_msg = crate::agent::AgentMessage {
-                        session_id: format!("slack:{}", channel_id),
-                        tenant_id: format!("slack:{}", channel_id),
+                        session_id: session_id.clone(),
+                        tenant_id: session_id,
                         content: text,
                         response_tx,
                     };
@@ -193,6 +306,62 @@ impl SlackHandler {
              }
          }
          Ok(())
+    }
+
+    async fn ensure_confirmation_adapter(&self, channel_id: &str) {
+        let mut ready = self.confirmation_ready.lock().await;
+        if ready.contains(channel_id) {
+            return;
+        }
+
+        let (response_tx, response_rx) = mpsc::channel(10);
+        let channel = format!("slack:{}", channel_id);
+        let adapter = crate::tools::channel_confirmation::ChannelConfirmationAdapter::new(
+            channel,
+            self.confirmation_outbound_tx.clone(),
+            response_rx,
+        );
+
+        {
+            let mut service = self.confirmation_service.lock().await;
+            service.register_adapter(Box::new(adapter));
+        }
+
+        let mut txs = self.confirmation_txs.lock().await;
+        txs.insert(channel_id.to_string(), response_tx);
+        ready.insert(channel_id.to_string());
+    }
+}
+
+fn is_slack_dm(event: &SlackMessageEvent, channel_id: &str) -> bool {
+    if let Some(channel_type) = event.origin.channel_type.as_ref() {
+        let label = format!("{:?}", channel_type).to_lowercase();
+        if label == "im" || label == "mpim" {
+            return true;
+        }
+        if label == "channel" || label == "group" {
+            return false;
+        }
+    }
+
+    channel_id.starts_with('D')
+}
+
+fn parse_confirmation_response(text: &str) -> Option<(bool, String)> {
+    let trimmed = text.trim();
+    let (allowed, rest) = if let Some(rest) = trimmed.strip_prefix("/allow ") {
+        (true, rest)
+    } else if let Some(rest) = trimmed.strip_prefix("/deny ") {
+        (false, rest)
+    } else {
+        return None;
+    };
+
+    let request_id = rest.trim();
+    if request_id.is_empty() {
+        None
+    } else {
+        Some((allowed, request_id.to_string()))
     }
 }
 

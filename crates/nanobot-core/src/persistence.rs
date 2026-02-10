@@ -1,8 +1,8 @@
 use anyhow::Result;
-use rig::OneOrMany;
-use rig::completion::Message;
 use rig::completion::message::{AssistantContent, Text, UserContent};
-use rusqlite::{Connection, params};
+use rig::completion::Message;
+use rig::OneOrMany;
+use rusqlite::{params, Connection, Transaction};
 use std::path::PathBuf;
 
 // Global connection (simplified for single-process use)
@@ -115,6 +115,14 @@ impl PersistenceManager {
         Ok(())
     }
 
+    pub fn ensure_session_tx(tx: &Transaction, session_id: &str) -> Result<()> {
+        tx.execute(
+            "INSERT INTO sessions (id) VALUES (?1) ON CONFLICT(id) DO NOTHING",
+            params![session_id],
+        )?;
+        Ok(())
+    }
+
     pub fn save_message(&self, session_id: &str, role: &str, content: &str) -> Result<()> {
         // Ensure session exists first
         self.ensure_session(session_id)?;
@@ -123,6 +131,41 @@ impl PersistenceManager {
         conn.execute(
             "INSERT INTO messages (session_id, role, content) VALUES (?1, ?2, ?3)",
             params![session_id, role, content],
+        )?;
+        Ok(())
+    }
+
+    pub fn save_message_tx(
+        tx: &Transaction,
+        session_id: &str,
+        role: &str,
+        content: &str,
+    ) -> Result<()> {
+        Self::ensure_session_tx(tx, session_id)?;
+        tx.execute(
+            "INSERT INTO messages (session_id, role, content) VALUES (?1, ?2, ?3)",
+            params![session_id, role, content],
+        )?;
+        Ok(())
+    }
+
+    pub fn start_message(&self, session_id: &str, role: &str) -> Result<i64> {
+        self.ensure_session(session_id)?;
+
+        let conn = Connection::open(&self.db_path)?;
+        conn.execute(
+            "INSERT INTO messages (session_id, role, content) VALUES (?1, ?2, ?3)",
+            params![session_id, role, ""],
+        )?;
+
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn append_message_content(&self, message_id: i64, chunk: &str) -> Result<()> {
+        let conn = Connection::open(&self.db_path)?;
+        conn.execute(
+            "UPDATE messages SET content = content || ?1 WHERE id = ?2",
+            params![chunk, message_id],
         )?;
         Ok(())
     }

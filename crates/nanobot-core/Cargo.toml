@@ -46,6 +46,7 @@ tower-http = { workspace = true }
 tokio-stream = { workspace = true }
 eventsource-stream = { workspace = true }
 futures = { workspace = true }
+jsonwebtoken = { workspace = true }
 dialoguer = { workspace = true }
 console = { workspace = true }
 sysinfo = { workspace = true }
@@ -80,6 +81,27 @@ chromiumoxide = { version = "0.7", optional = true }
 [features]
 default = []
 browser = ["dep:chromiumoxide"]
+examples = []
+
+[[example]]
+name = "validate_features"
+required-features = ["examples", "browser"]
+
+[[example]]
+name = "verify_gateway_registry"
+required-features = ["examples"]
+
+[[example]]
+name = "verify_telegram_router"
+required-features = ["examples"]
+
+[[example]]
+name = "verify_pairing"
+required-features = ["examples"]
+
+[[example]]
+name = "verify_integrity"
+required-features = ["examples"]
 
 [dev-dependencies]
 tempfile = "3.10"

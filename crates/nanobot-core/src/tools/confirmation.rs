@@ -12,6 +12,7 @@ pub struct ConfirmationRequest {
     pub args: String,
     pub risk_level: RiskLevel,
     pub timeout: Option<Duration>,
+    pub channel: Option<String>,
 }
 
 /// Risk level for an operation
@@ -41,6 +42,11 @@ pub trait ConfirmationAdapter: Send + Sync {
     /// Get the adapter's name (for logging/debugging)
     fn name(&self) -> &str;
 
+    /// Channel identifier this adapter serves (e.g., "telegram:123")
+    fn channel(&self) -> Option<&str> {
+        None
+    }
+
     /// Check if the adapter is available/ready
     async fn is_available(&self) -> bool {
         true
@@ -51,6 +57,7 @@ pub trait ConfirmationAdapter: Send + Sync {
 pub struct ConfirmationService {
     adapters: Vec<Box<dyn ConfirmationAdapter>>,
     default_timeout: Duration,
+    pending: std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
 }
 
 impl ConfirmationService {
@@ -58,6 +65,7 @@ impl ConfirmationService {
         Self {
             adapters: Vec::new(),
             default_timeout: Duration::from_secs(300), // 5 minutes
+            pending: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -68,16 +76,36 @@ impl ConfirmationService {
 
     /// Request confirmation using the first available adapter
     pub async fn request_confirmation(&self, mut request: ConfirmationRequest) -> Result<ConfirmationResponse> {
+        if request.id.is_empty() {
+            request.id = uuid::Uuid::new_v4().to_string();
+        }
+
         // Set default timeout if not specified
         if request.timeout.is_none() {
             request.timeout = Some(self.default_timeout);
         }
 
-        // Try each adapter in order until one succeeds
+        {
+            let mut pending = self.pending.lock().unwrap();
+            pending.insert(request.id.clone(), std::time::Instant::now());
+        }
+
+        if let Some(channel) = request.channel.as_deref() {
+            for adapter in &self.adapters {
+                if adapter.channel() == Some(channel) && adapter.is_available().await {
+                    tracing::info!("Requesting confirmation via adapter: {}", adapter.name());
+                    let response = adapter.request_confirmation(&request).await;
+                    return self.validate_response(&request, response);
+                }
+            }
+        }
+
+        // Fallback: Try any available adapter
         for adapter in &self.adapters {
             if adapter.is_available().await {
                 tracing::info!("Requesting confirmation via adapter: {}", adapter.name());
-                return adapter.request_confirmation(&request).await;
+                let response = adapter.request_confirmation(&request).await;
+                return self.validate_response(&request, response);
             }
         }
 
@@ -88,6 +116,34 @@ impl ConfirmationService {
             allowed: false,
             remember: false,
         })
+    }
+
+    fn validate_response(
+        &self,
+        request: &ConfirmationRequest,
+        response: Result<ConfirmationResponse>,
+    ) -> Result<ConfirmationResponse> {
+        let response = response?;
+        let mut pending = self.pending.lock().unwrap();
+
+        if let Some(created_at) = pending.remove(&response.id) {
+            let timeout = request.timeout.unwrap_or(self.default_timeout);
+            if created_at.elapsed() > timeout {
+                return Ok(ConfirmationResponse {
+                    id: response.id,
+                    allowed: false,
+                    remember: false,
+                });
+            }
+
+            Ok(response)
+        } else {
+            Ok(ConfirmationResponse {
+                id: response.id,
+                allowed: false,
+                remember: false,
+            })
+        }
     }
 }
 
@@ -136,6 +192,7 @@ mod tests {
             args: "npm install".to_string(),
             risk_level: RiskLevel::Medium,
             timeout: None,
+            channel: None,
         };
 
         let response = service.request_confirmation(request).await.unwrap();
@@ -153,6 +210,7 @@ mod tests {
             args: "rm -rf /".to_string(),
             risk_level: RiskLevel::Critical,
             timeout: None,
+            channel: None,
         };
 
         let response = service.request_confirmation(request).await.unwrap();

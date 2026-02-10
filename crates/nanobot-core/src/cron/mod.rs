@@ -7,24 +7,12 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
+
+use crate::events::AgentEvent;
 use tokio_cron_scheduler::{Job, JobScheduler};
 use uuid::Uuid;
 
-/// Events sent by cron jobs when they fire
-#[derive(Debug, Clone)]
-pub enum CronEvent {
-    SystemEvent {
-        job_id: String,
-        text: String,
-    },
-    AgentTurn {
-        job_id: String,
-        message: String,
-        model: Option<String>,
-        thinking: Option<String>,
-        timeout_seconds: Option<u64>,
-    },
-}
+// AgentEvent is defined in crate::events for non-cron sources too.
 
 /// Schedule types for cron jobs
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,11 +140,11 @@ impl CronJob {
 pub struct CronScheduler {
     db_path: PathBuf,
     scheduler: JobScheduler,
-    event_tx: mpsc::Sender<CronEvent>,
+    event_tx: mpsc::Sender<AgentEvent>,
 }
 
 impl CronScheduler {
-    pub async fn new(db_path: PathBuf, event_tx: mpsc::Sender<CronEvent>) -> Result<Self> {
+    pub async fn new(db_path: PathBuf, event_tx: mpsc::Sender<AgentEvent>) -> Result<Self> {
         let scheduler = JobScheduler::new().await?;
         Ok(Self {
             db_path,
@@ -213,8 +201,8 @@ impl CronScheduler {
                             .as_millis() as u64;
 
                         let event = match payload {
-                            Payload::SystemEvent { text } => CronEvent::SystemEvent {
-                                job_id: id.clone(),
+                            Payload::SystemEvent { text } => AgentEvent::SystemEvent {
+                                job_id: Some(id.clone()),
                                 text,
                             },
                             Payload::AgentTurn {
@@ -222,8 +210,8 @@ impl CronScheduler {
                                 model,
                                 thinking,
                                 timeout_seconds,
-                            } => CronEvent::AgentTurn {
-                                job_id: id.clone(),
+                            } => AgentEvent::AgentTurn {
+                                job_id: Some(id.clone()),
                                 message,
                                 model,
                                 thinking,
@@ -232,7 +220,10 @@ impl CronScheduler {
                         };
 
                         // Send event
-                        let result = tx.send(event).await;
+                        let result: std::result::Result<
+                            (),
+                            tokio::sync::mpsc::error::SendError<AgentEvent>,
+                        > = tx.send(event).await;
 
                         // Record execution to run log
                         let end_time = std::time::SystemTime::now()
@@ -280,8 +271,8 @@ impl CronScheduler {
 
                         Box::pin(async move {
                             let event = match payload {
-                                Payload::SystemEvent { text } => CronEvent::SystemEvent {
-                                    job_id: job_id.clone(),
+                                Payload::SystemEvent { text } => AgentEvent::SystemEvent {
+                                    job_id: Some(job_id.clone()),
                                     text,
                                 },
                                 Payload::AgentTurn {
@@ -289,8 +280,8 @@ impl CronScheduler {
                                     model,
                                     thinking,
                                     timeout_seconds,
-                                } => CronEvent::AgentTurn {
-                                    job_id: job_id.clone(),
+                                } => AgentEvent::AgentTurn {
+                                    job_id: Some(job_id.clone()),
                                     message,
                                     model,
                                     thinking,
@@ -324,8 +315,8 @@ impl CronScheduler {
 
                         Box::pin(async move {
                             let event = match payload {
-                                Payload::SystemEvent { text } => CronEvent::SystemEvent {
-                                    job_id: job_id.clone(),
+                                Payload::SystemEvent { text } => AgentEvent::SystemEvent {
+                                    job_id: Some(job_id.clone()),
                                     text,
                                 },
                                 Payload::AgentTurn {
@@ -333,8 +324,8 @@ impl CronScheduler {
                                     model,
                                     thinking,
                                     timeout_seconds,
-                                } => CronEvent::AgentTurn {
-                                    job_id: job_id.clone(),
+                                } => AgentEvent::AgentTurn {
+                                    job_id: Some(job_id.clone()),
                                     message,
                                     model,
                                     thinking,

@@ -64,6 +64,7 @@ impl super::definitions::Tool for SpawnSubagentTool {
                 task.clone(),
                 None,
                 crate::gateway::agent_manager::CleanupPolicy::Delete,
+                None,
             )
             .await?;
 

@@ -9,6 +9,7 @@ pub mod confirmation;
 pub mod cli_confirmation;
 pub mod telegram_confirmation;
 pub mod gateway_confirmation;
+pub mod channel_confirmation;
 pub mod docker;
 pub mod docker_executor;
 pub mod executor;
@@ -16,6 +17,7 @@ pub mod guard;
 
 pub use permissions::{PermissionManager, SecurityProfile, PermissionDecision, Operation};
 pub use confirmation::{ConfirmationRequest, ConfirmationResponse, ConfirmationService, ConfirmationAdapter, RiskLevel};
+pub use channel_confirmation::ChannelConfirmationResponse;
 pub mod fetch;
 pub mod filesystem;
 pub mod list_directory_tool;

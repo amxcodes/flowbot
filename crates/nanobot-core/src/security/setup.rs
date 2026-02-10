@@ -1,6 +1,6 @@
-use anyhow::Result;
-use crate::security::SecretManager;
 use crate::config::EncryptedSecrets;
+use crate::security::SecretManager;
+use anyhow::Result;
 use std::io::{self, Write};
 
 /// Setup wizard for secrets encryption
@@ -17,10 +17,10 @@ pub fn run_setup_wizard() -> Result<()> {
         println!("⚠️  Encryption is already set up.");
         print!("Do you want to reset it? (y/N): ");
         io::stdout().flush()?;
-        
+
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
-        
+
         if !input.trim().eq_ignore_ascii_case("y") {
             println!("Setup cancelled.");
             return Ok(());
@@ -92,7 +92,9 @@ fn migrate_secrets(manager: &SecretManager, config_path: &std::path::PathBuf) ->
     let mut migrated = false;
 
     // Migrate tokens.json
-    let tokens_path = std::path::PathBuf::from(".").join(".nanobot").join("tokens.json");
+    let tokens_path = std::path::PathBuf::from(".")
+        .join(".nanobot")
+        .join("tokens.json");
     if tokens_path.exists() {
         println!("  Migrating tokens.json...");
         EncryptedSecrets::migrate_from_plaintext(manager)?;
@@ -112,8 +114,8 @@ fn migrate_secrets(manager: &SecretManager, config_path: &std::path::PathBuf) ->
 /// Verify master password works
 pub fn verify_password() -> Result<SecretManager> {
     let salt = SecretManager::load_or_create_salt()?;
-    
-    // Try environment variable first  
+
+    // Try environment variable first
     if let Ok(password) = std::env::var("NANOBOT_MASTER_PASSWORD") {
         match SecretManager::new(&password, &salt) {
             Ok(manager) => return Ok(manager),
@@ -127,10 +129,10 @@ pub fn verify_password() -> Result<SecretManager> {
     // Interactive prompt
     print!("🔐 Enter master password: ");
     io::stdout().flush()?;
-    
+
     let password = rpassword::read_password()?;
     let manager = SecretManager::new(&password, &salt)
         .map_err(|_| anyhow::anyhow!("Invalid master password"))?;
-    
+
     Ok(manager)
 }

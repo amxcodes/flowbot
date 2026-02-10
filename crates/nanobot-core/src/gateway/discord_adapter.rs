@@ -5,9 +5,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use async_trait::async_trait;
 use std::sync::Arc;
-use super::adapter::{ChannelAdapter, ChannelMessage};
+use super::adapter::{build_session_id, ChannelAdapter, ChannelMessage};
 use super::registry::ChannelRegistry;
-use futures::StreamExt;
 
 // Twilight Imports
 use twilight_gateway::{Shard, ShardId, Event, Intents};
@@ -20,6 +19,8 @@ use twilight_model::id::marker::ChannelMarker;
 pub struct DiscordConfig {
     pub token: String,
     pub application_id: u64,
+    #[serde(default)]
+    pub dm_scope: crate::config::DmScope,
 }
 
 /// Discord bot instance using Gateway Registry pattern
@@ -28,6 +29,10 @@ pub struct DiscordBot {
     agent_tx: mpsc::Sender<crate::agent::AgentMessage>,
     registry: Arc<ChannelRegistry>,
     http_client: Arc<HttpClient>,
+    confirmation_service: Arc<tokio::sync::Mutex<crate::tools::ConfirmationService>>,
+    confirmation_txs: Arc<tokio::sync::Mutex<std::collections::HashMap<u64, mpsc::Sender<crate::tools::ChannelConfirmationResponse>>>>,
+    confirmation_ready: Arc<tokio::sync::Mutex<std::collections::HashSet<u64>>>,
+    confirmation_outbound_tx: mpsc::Sender<ChannelMessage>,
 }
 
 impl DiscordBot {
@@ -36,6 +41,7 @@ impl DiscordBot {
         config: DiscordConfig,
         agent_tx: mpsc::Sender<crate::agent::AgentMessage>,
         registry: Arc<ChannelRegistry>,
+        confirmation_service: Arc<tokio::sync::Mutex<crate::tools::ConfirmationService>>,
     ) -> Self {
         let http_client = Arc::new(HttpClient::new(config.token.clone()));
         
@@ -44,6 +50,13 @@ impl DiscordBot {
             agent_tx,
             registry,
             http_client,
+            confirmation_service,
+            confirmation_txs: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            confirmation_ready: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
+            confirmation_outbound_tx: {
+                let (tx, _rx) = mpsc::channel(1);
+                tx
+            },
         }
     }
 
@@ -88,6 +101,25 @@ impl DiscordBot {
         if text.is_empty() {
             return Ok(());
         }
+
+        self.ensure_confirmation_adapter(channel_id.get()).await;
+
+        if let Some((allowed, request_id)) = parse_confirmation_response(&text) {
+            let tx = {
+                let txs = self.confirmation_txs.lock().await;
+                txs.get(&channel_id.get()).cloned()
+            };
+
+            if let Some(sender) = tx {
+                let _ = sender
+                    .send(crate::tools::ChannelConfirmationResponse { request_id, allowed })
+                    .await;
+                let _ = self.post_message(channel_id, "Confirmation received.").await;
+            } else {
+                let _ = self.post_message(channel_id, "No pending confirmation.").await;
+            }
+            return Ok(());
+        }
         
         // --- Pairing Authorization Logic ---
         match crate::pairing::is_authorized("discord", &user_id).await {
@@ -112,11 +144,35 @@ impl DiscordBot {
         }
         // -----------------------------------
 
+        if let Some(token) = text.strip_prefix("/set_admin_token ") {
+            let token = token.trim();
+            if token.is_empty() {
+                let _ = self.post_message(channel_id, "Token cannot be empty").await;
+                return Ok(());
+            }
+            if let Err(e) = crate::security::write_admin_token(token) {
+                let _ = self
+                    .post_message(channel_id, &format!("Failed to save token: {}", e))
+                    .await;
+                return Ok(());
+            }
+            let _ = self.post_message(channel_id, "Admin token saved").await;
+            return Ok(());
+        }
+
         // Forward to AgentLoop
         let (response_tx, mut response_rx) = mpsc::channel(100);
+        let is_dm = msg.guild_id.is_none();
+        let session_id = build_session_id(
+            "discord",
+            &channel_id.get().to_string(),
+            &user_id,
+            self.config.dm_scope,
+            is_dm,
+        );
         let agent_msg = crate::agent::AgentMessage {
-            session_id: format!("discord:{}", channel_id),
-            tenant_id: format!("discord:{}", channel_id),
+            session_id: session_id.clone(),
+            tenant_id: session_id,
             content: text,
             response_tx,
         };
@@ -150,15 +206,18 @@ impl DiscordBot {
 
         // 1. Create Inbox and register with Gateway Registry (for outbound)
         let (inbox_tx, mut inbox_rx) = mpsc::channel::<ChannelMessage>(100);
-        registry.register("discord", inbox_tx).await;
+        registry.register("discord", inbox_tx.clone()).await;
         tracing::info!("✅ Discord adapter registered");
+
+        let mut bot = self;
+        bot.confirmation_outbound_tx = inbox_tx.clone();
 
         // 2. Start Gateway Shard (Inbound)
         let intents = Intents::GUILD_MESSAGES | Intents::DIRECT_MESSAGES | Intents::MESSAGE_CONTENT;
-        let mut shard = Shard::new(ShardId::ONE, self.config.token.clone(), intents);
+        let mut shard = Shard::new(ShardId::ONE, bot.config.token.clone(), intents);
 
         // 3. Spawn Outbound Handler
-        let http_client = self.http_client.clone();
+        let http_client = bot.http_client.clone();
         tokio::spawn(async move {
             tracing::info!("📤 Discord Outbound Actor started");
             while let Some(msg) = inbox_rx.recv().await {
@@ -193,7 +252,7 @@ impl DiscordBot {
 
             match event {
                 Event::MessageCreate(msg) => {
-                    if let Err(e) = self.handle_message(*msg).await {
+                    if let Err(e) = bot.handle_message(*msg).await {
                         tracing::error!("Failed to handle Discord message: {:?}", e);
                     }
                 }
@@ -205,6 +264,48 @@ impl DiscordBot {
         }
 
         Ok(())
+    }
+
+    async fn ensure_confirmation_adapter(&self, channel_id: u64) {
+        let mut ready = self.confirmation_ready.lock().await;
+        if ready.contains(&channel_id) {
+            return;
+        }
+
+        let (response_tx, response_rx) = mpsc::channel(10);
+        let channel = format!("discord:{}", channel_id);
+        let adapter = crate::tools::channel_confirmation::ChannelConfirmationAdapter::new(
+            channel,
+            self.confirmation_outbound_tx.clone(),
+            response_rx,
+        );
+
+        {
+            let mut service = self.confirmation_service.lock().await;
+            service.register_adapter(Box::new(adapter));
+        }
+
+        let mut txs = self.confirmation_txs.lock().await;
+        txs.insert(channel_id, response_tx);
+        ready.insert(channel_id);
+    }
+}
+
+fn parse_confirmation_response(text: &str) -> Option<(bool, String)> {
+    let trimmed = text.trim();
+    let (allowed, rest) = if let Some(rest) = trimmed.strip_prefix("/allow ") {
+        (true, rest)
+    } else if let Some(rest) = trimmed.strip_prefix("/deny ") {
+        (false, rest)
+    } else {
+        return None;
+    };
+
+    let request_id = rest.trim();
+    if request_id.is_empty() {
+        None
+    } else {
+        Some((allowed, request_id.to_string()))
     }
 }
 

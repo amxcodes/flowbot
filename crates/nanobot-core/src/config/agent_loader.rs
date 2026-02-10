@@ -1,5 +1,5 @@
-use anyhow::Result;
 use crate::config::AgentManifest;
+use anyhow::Result;
 use std::path::Path;
 
 /// Agent loader that builds runtime agents from manifests
@@ -10,20 +10,24 @@ impl AgentLoader {
     pub fn load(path: &Path) -> Result<AgentManifest> {
         AgentManifest::load(path)
     }
-    
+
     /// Validate manifest
     pub fn validate(manifest: &AgentManifest) -> Result<()> {
         manifest.validate()
     }
-    
+
     /// Display manifest info
     pub fn info(manifest: &AgentManifest) {
         println!("📋 Agent Manifest");
         println!("   Name: {}", manifest.agent.name);
         println!("   Version: {}", manifest.agent.version);
-        println!("   Identity: {} ({})", manifest.identity.name, manifest.identity.role);
+        println!(
+            "   Identity: {} ({})",
+            manifest.identity.name, manifest.identity.role
+        );
         println!("   Channels: {}", manifest.channels.len());
-        println!("   Tools: {} allowed, {} denied", 
+        println!(
+            "   Tools: {} allowed, {} denied",
             manifest.tools.allow.len(),
             manifest.tools.deny.len()
         );
@@ -38,7 +42,7 @@ impl AgentLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_load_manifest() {
         // Test manifest loading logic
@@ -55,7 +59,7 @@ system_prompt = "Test prompt"
 [tools]
 allow = ["test_tool"]
 "#;
-        
+
         let manifest: AgentManifest = toml::from_str(toml).unwrap();
         AgentLoader::validate(&manifest).unwrap();
     }

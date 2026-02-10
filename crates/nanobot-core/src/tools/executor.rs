@@ -2,6 +2,7 @@
 // Since Rig's tool API isn't well documented, we'll use a prompt-based approach
 
 use anyhow::Result;
+use serde_json::json;
 
 use super::filesystem::{edit_file, EditFileArgs};
 
@@ -53,35 +54,45 @@ You have access to the following tools:
 13. **script_eval** - Execute a Rhai script for data transformation or logic
     Usage: { "tool": "script_eval", "script": "let x = 10; x * 2", "function": "optional_fn_name", "args": ["arg1"] }
     Note: Scripts are sandboxed. No loops allowed. Max string size 100KB.
+
+14. **sessions_spawn** - Spawn an isolated subagent to handle a task
+    Usage: { "tool": "sessions_spawn", "task": "do X", "label": "optional", "cleanup": "delete", "parentSessionId": "main", "model": "optional" }
+    Note: Use **sessions_wait** to block until completion.
+
+15. **sessions_wait** - Wait for a subagent session to finish
+    Usage: { "tool": "sessions_wait", "session_id": "...", "timeout_seconds": 120 }
+
+16. **sessions_broadcast** - Send an interim update from a subagent to its parent
+    Usage: { "tool": "sessions_broadcast", "session_id": "...", "message": "progress update" }
 "#.to_string();
 
     #[cfg(feature = "browser")]
     {
         s.push_str(r##"
-14. **browser_navigate** - Navigate to a URL in the browser
+17. **browser_navigate** - Navigate to a URL in the browser
     Usage: { "tool": "browser_navigate", "url": "https://example.com" }
 
-15. **browser_click** - Click an element by CSS selector
+18. **browser_click** - Click an element by CSS selector
     Usage: { "tool": "browser_click", "selector": "#submit-button" }
 
-16. **browser_type** - Type text into an element
+19. **browser_type** - Type text into an element
     Usage: { "tool": "browser_type", "selector": "input[name='q']", "text": "hello" }
 
-17. **browser_screenshot** - Take a screenshot of the current page
+20. **browser_screenshot** - Take a screenshot of the current page
     Usage: { "tool": "browser_screenshot" }
     Returns path to saved PNG file.
 
-18. **browser_evaluate** - Execute JavaScript on the page
+21. **browser_evaluate** - Execute JavaScript on the page
     Usage: { "tool": "browser_evaluate", "script": "document.title" }
 
-19. **browser_pdf** - Print current page to PDF
+22. **browser_pdf** - Print current page to PDF
     Usage: { "tool": "browser_pdf" }
     Returns path to saved PDF file.
 
-20. **browser_list_tabs** - List all open browser tabs
+23. **browser_list_tabs** - List all open browser tabs
     Usage: { "tool": "browser_list_tabs" }
 
-21. **browser_switch_tab** - Switch to a specific tab
+24. **browser_switch_tab** - Switch to a specific tab
     Usage: { "tool": "browser_switch_tab", "index": 0 }
 "##);
     }
@@ -98,10 +109,13 @@ pub async fn execute_tool(
     agent_manager: Option<&crate::gateway::agent_manager::AgentManager>,
     memory_manager: Option<&std::sync::Arc<crate::memory::MemoryManager>>,
     permission_manager: Option<&tokio::sync::Mutex<super::PermissionManager>>,
+    tool_policy: Option<&super::policy::ToolPolicy>,
+    confirmation_service: Option<&tokio::sync::Mutex<super::confirmation::ConfirmationService>>,
     skill_loader: Option<&std::sync::Arc<tokio::sync::Mutex<crate::skills::SkillLoader>>>,
     #[cfg(feature = "browser")]
     browser_client: Option<&crate::browser::BrowserClient>,
     tenant_id: Option<&str>,
+    mcp_manager: Option<&std::sync::Arc<crate::mcp::McpManager>>,
 ) -> Result<String> {
     // Strip prefix if present (optional support)
     let json_str = tool_input.trim().trim_start_matches("__TOOL_CALL__").trim();
@@ -123,6 +137,12 @@ pub async fn execute_tool(
 
     // Phase 3: Security Integration
     let workspace_root = std::env::current_dir()?;
+    let default_policy = super::policy::ToolPolicy::permissive();
+    let policy = tool_policy.unwrap_or(&default_policy);
+
+    policy
+        .check_tool_allowed(tool_name)
+        .map_err(|e| anyhow::anyhow!("Policy violation: {}", e))?;
     
     // Map tool to operation type for permission checking
     let operation = match tool_name {
@@ -142,6 +162,18 @@ pub async fn execute_tool(
                 super::permissions::Operation::WriteFile(workspace_root.join("unknown"))
             }
         }
+        "web_fetch" => tool_call
+            .get("url")
+            .and_then(|v| v.as_str())
+            .map(|url| super::permissions::Operation::NetworkRequest(url.to_string()))
+            .unwrap_or_else(|| super::permissions::Operation::NetworkRequest("web_fetch".to_string())),
+        "web_search" => {
+            super::permissions::Operation::NetworkRequest("web_search".to_string())
+        }
+        "browser_navigate" | "browser_click" | "browser_type" | "browser_screenshot"
+        | "browser_evaluate" | "browser_pdf" | "browser_list_tabs" | "browser_switch_tab" => {
+            super::permissions::Operation::NetworkRequest("browser".to_string())
+        }
         "run_command" | "bash" | "exec" => {
             let cmd = tool_call.get("command")
                 .or(tool_call.get("cmd"))
@@ -154,9 +186,53 @@ pub async fn execute_tool(
             super::permissions::Operation::ExecuteCommand(format!("unknown:{}", tool_name))
         }
     };
+
+    match tool_name {
+        "read_file" | "list_directory" => {
+            if let Some(path_str) = tool_call.get("path").and_then(|v| v.as_str()) {
+                policy
+                    .check_read_path(path_str)
+                    .map_err(|e| anyhow::anyhow!("Policy violation: {}", e))?;
+            }
+        }
+        "write_file" | "edit_file" | "apply_patch" => {
+            if let Some(path_str) = tool_call.get("path").and_then(|v| v.as_str()) {
+                policy
+                    .check_write_path(path_str)
+                    .map_err(|e| anyhow::anyhow!("Policy violation: {}", e))?;
+            }
+        }
+        "run_command" | "spawn_process" => {
+            if let Some(cmd) = tool_call
+                .get("command")
+                .or(tool_call.get("cmd"))
+                .and_then(|v| v.as_str())
+            {
+                policy
+                    .check_command_allowed(cmd)
+                    .map_err(|e| anyhow::anyhow!("Policy violation: {}", e))?;
+            }
+        }
+        _ => {}
+    }
     
     // Check permission (using passed permission manager or create temporary one)
-    let decision = if let Some(perm_mgr) = permission_manager {
+    let channel_key = tenant_id.unwrap_or("default");
+    let operation_key = format!("{}:{}:{:?}", channel_key, tool_name, operation);
+    let cached_decision = if let Some(perm_mgr) = permission_manager {
+        let mgr = perm_mgr.lock().await;
+        mgr.get_cached_decision(&operation_key)
+    } else {
+        None
+    };
+
+    let decision = if let Some(cached) = cached_decision {
+        if cached {
+            super::permissions::PermissionDecision::Allow
+        } else {
+            super::permissions::PermissionDecision::Deny
+        }
+    } else if let Some(perm_mgr) = permission_manager {
         let mgr = perm_mgr.lock().await;
         mgr.check_permission(&operation)
     } else {
@@ -167,8 +243,6 @@ pub async fn execute_tool(
     };
     
     // Create confirmation service with CLI adapter
-    let mut confirmation_service = super::confirmation::ConfirmationService::new();
-    confirmation_service.register_adapter(Box::new(super::cli_confirmation::CliConfirmationAdapter::new()));
     
     
     match decision {
@@ -193,13 +267,28 @@ pub async fn execute_tool(
                 args: serde_json::to_string_pretty(&tool_call)?,
                 risk_level,
                 timeout: None,
+                channel: tenant_id.map(|id| id.to_string()),
             };
             
-            let response = confirmation_service.request_confirmation(request).await?;
+            let response = if let Some(service) = confirmation_service {
+                service.lock().await.request_confirmation(request).await?
+            } else {
+                let mut local_service = super::confirmation::ConfirmationService::new();
+                local_service
+                    .register_adapter(Box::new(super::cli_confirmation::CliConfirmationAdapter::new()));
+                local_service.request_confirmation(request).await?
+            };
             
             if !response.allowed {
                 tracing::info!("User denied permission for tool: {}", tool_name);
                 return Ok(super::ToolResult::error(format!("User denied permission for tool: {}", tool_name)).output);
+            }
+
+            if response.remember {
+                if let Some(perm_mgr) = permission_manager {
+                    let mut mgr = perm_mgr.lock().await;
+                    mgr.cache_decision(operation_key, true);
+                }
             }
             
             tracing::info!("User approved permission for tool: {}", tool_name);
@@ -230,9 +319,42 @@ pub async fn execute_tool(
         }
     }
 
+    // Try MCP Tools
+    if let Some(manager) = mcp_manager {
+        // Prepare args (remove "tool" field)
+        let args = if let Some(obj) = tool_call.as_object() {
+            let mut args_obj = obj.clone();
+            args_obj.remove("tool");
+            serde_json::Value::Object(args_obj)
+        } else {
+            tool_call.clone()
+        };
+
+        if let Some(result) = manager.execute_tool_by_name(tool_name, args).await {
+            match result {
+                Ok(tool_res) => {
+                     let output = tool_res.content.iter()
+                        .map(|c| match c {
+                            crate::mcp::types::ToolCallContent::Text { text } => text.clone(),
+                            _ => "[Non-text content]".to_string(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                        
+                    if tool_res.is_error.unwrap_or(false) {
+                         return Ok(format!("❌ Tool Error: {}", output));
+                    } else {
+                         return Ok(output);
+                    }
+                }
+                Err(e) => return Err(anyhow::anyhow!("MCP Tool execution failed: {}", e)),
+            }
+        }
+    }
+
     // Try ToolRegistry next (for simple, modular tools)
     let registry = super::definitions::get_tool_registry();
-    if let Some(tool) = registry.get(tool_name) {
+    if registry.get(tool_name).is_some() {
         // Extract args (everything except "tool" field)
         let args = if let Some(obj) = tool_call.as_object() {
             let mut args_obj = obj.clone();
@@ -242,7 +364,7 @@ pub async fn execute_tool(
             tool_call.clone()
         };
 
-        return tool.execute(args).await;
+        return registry.execute_with_policy(tool_name, args, policy).await;
     }
 
     // Fall back to legacy match for complex tools that need context
@@ -405,6 +527,68 @@ pub async fn execute_tool(
             }
         },
 
+        "sessions_wait" => match agent_manager {
+            Some(manager) => {
+                let session_id = tool_call["session_id"]
+                    .as_str()
+                    .or_else(|| tool_call["sessionId"].as_str())
+                    .ok_or_else(|| anyhow::anyhow!("Missing 'session_id' field"))?;
+                let timeout_seconds = tool_call["timeout_seconds"]
+                    .as_u64()
+                    .or_else(|| tool_call["timeoutSeconds"].as_u64())
+                    .unwrap_or(120);
+
+                match manager
+                    .wait_for_task(session_id, std::time::Duration::from_secs(timeout_seconds))
+                    .await
+                {
+                    Ok(task) => {
+                        let status_str = match task.status {
+                            crate::gateway::agent_manager::TaskStatus::Pending => "pending",
+                            crate::gateway::agent_manager::TaskStatus::Running => "running",
+                            crate::gateway::agent_manager::TaskStatus::Completed => "completed",
+                            crate::gateway::agent_manager::TaskStatus::Failed => "failed",
+                        };
+                        Ok(json!({
+                            "session_id": task.session_id,
+                            "task_id": task.id,
+                            "status": status_str,
+                            "result": task.result,
+                        })
+                        .to_string())
+                    }
+                    Err(e) => Ok(json!({
+                        "session_id": session_id,
+                        "status": "timeout",
+                        "error": e.to_string(),
+                    })
+                    .to_string()),
+                }
+            }
+            None => Ok("Agent manager not initialized. Available in gateway/server mode.".to_string()),
+        },
+
+        "sessions_broadcast" => match agent_manager {
+            Some(manager) => {
+                let session_id = tool_call["session_id"]
+                    .as_str()
+                    .or_else(|| tool_call["sessionId"].as_str())
+                    .ok_or_else(|| anyhow::anyhow!("Missing 'session_id' field"))?;
+                let message = tool_call["message"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Missing 'message' field"))?;
+                manager
+                    .broadcast_to_parent(session_id, message.to_string())
+                    .await?;
+                Ok(json!({
+                    "status": "sent",
+                    "session_id": session_id,
+                })
+                .to_string())
+            }
+            None => Ok("Agent manager not initialized. Available in gateway/server mode.".to_string()),
+        },
+
         #[cfg(feature = "browser")]
         "browser_navigate" => {
             if let Some(client) = browser_client {
@@ -522,10 +706,11 @@ pub fn is_tool_call(response: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::{PermissionManager, SecurityProfile};
 
     #[tokio::test]
     async fn test_tool_parsing() {
-        let json =
+        let _json =
             r#"{"tool": "run_command", "command": "echo", "args": ["hello"], "use_docker": false}"#;
         // We can't easily execute in unit test environment without real commands,
         // but we can check if it parses and tries to execute.
@@ -538,11 +723,40 @@ mod tests {
         // let's try "whoami" or "rustc --version" which is in our whitelist.
         
         let json = r#"{"tool": "run_command", "command": "cargo", "args": ["--version"]}"#;
+        let permission_manager = tokio::sync::Mutex::new(
+            PermissionManager::new(SecurityProfile::trust()),
+        );
+
         // Pass None for all optional context parameters
         #[cfg(feature = "browser")]
-        let result = execute_tool(json, None, None, None, None, None, None, None).await;
+        let result = execute_tool(
+            json,
+            None,
+            None,
+            None,
+            Some(&permission_manager),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
         #[cfg(not(feature = "browser"))]
-        let result = execute_tool(json, None, None, None, None, None, None).await;
+        let result = execute_tool(
+            json,
+            None,
+            None,
+            None,
+            Some(&permission_manager),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
 
         assert!(result.is_ok());
         let output = result.unwrap();

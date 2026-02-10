@@ -1,6 +1,6 @@
 use anyhow::Result;
 use console::style;
-use dialoguer::{Confirm, Input, MultiSelect, Select, theme::ColorfulTheme};
+use dialoguer::{Confirm, Input, MultiSelect, Select, Password, theme::ColorfulTheme};
 use std::path::PathBuf;
 
 use super::{SetupOptions, templates::Personality, workspace_mgmt};
@@ -21,6 +21,12 @@ pub struct SetupResult {
     pub should_install_service: bool,
     pub should_hatch_tui: bool,
     pub should_start_gateway: bool,
+    pub enable_browser: bool,
+    pub dm_scope: crate::config::DmScope,
+    pub should_start_webchat: bool,
+    pub should_start_server: bool,
+    pub web_port: u16,
+    pub server_port: u16,
     pub workspace_dir: PathBuf,
 }
 
@@ -43,9 +49,24 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
             should_install_service: false,
             should_hatch_tui: false,
             should_start_gateway: false,
+            enable_browser: false,
+            dm_scope: crate::config::DmScope::Main,
+            should_start_webchat: false,
+            should_start_server: false,
+            web_port: 3000,
+            server_port: 3000,
             workspace_dir: PathBuf::from("."),
         });
     }
+
+    // 0. Wizard mode
+    let mode_options = vec!["Quick (Recommended)", "Advanced"];
+    let mode_idx = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("Choose setup mode")
+        .items(&mode_options)
+        .default(0)
+        .interact()?;
+    let quick_mode = mode_idx == 0;
 
     // 1. Agent identity
     let agent_name = Input::<String>::with_theme(&ColorfulTheme::default())
@@ -60,11 +81,15 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
         "Custom (I'll create my own SOUL.md)",
     ];
 
-    let vibe_idx = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("What's my vibe?")
-        .items(&vibe_options)
-        .default(1)
-        .interact()?;
+    let vibe_idx = if quick_mode {
+        1
+    } else {
+        Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("What's my vibe?")
+            .items(&vibe_options)
+            .default(1)
+            .interact()?
+    };
 
     let personality = match vibe_idx {
         0 => Personality::Professional,
@@ -76,13 +101,17 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
 
     // 2. Agent emoji
     let emoji_options = vec!["🤖", "🦊", "🐙", "⚡", "🌟", "🔮", "🎯", "Custom"];
-    let emoji_idx = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("Pick my emoji signature")
-        .items(&emoji_options)
-        .default(0)
-        .interact()?;
+    let emoji_idx = if quick_mode {
+        0
+    } else {
+        Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("Pick my emoji signature")
+            .items(&emoji_options)
+            .default(0)
+            .interact()?
+    };
 
-    let agent_emoji = if emoji_idx == emoji_options.len() - 1 {
+    let agent_emoji = if emoji_idx == emoji_options.len() - 1 && !quick_mode {
         Input::<String>::with_theme(&ColorfulTheme::default())
             .with_prompt("Enter custom emoji")
             .default("🤖".into())
@@ -96,37 +125,197 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
     println!("{}", style("Now let me learn about you!").bold());
     println!();
 
-    let user_name = Input::<String>::with_theme(&ColorfulTheme::default())
-        .with_prompt("What should I call you?")
-        .interact()?;
+    let user_name = if quick_mode {
+        "User".to_string()
+    } else {
+        Input::<String>::with_theme(&ColorfulTheme::default())
+            .with_prompt("What should I call you?")
+            .interact()?
+    };
 
-    let timezone = Input::<String>::with_theme(&ColorfulTheme::default())
-        .with_prompt("Your timezone (e.g., America/New_York)")
-        .default("UTC".into())
-        .interact()?;
+    let timezone = if quick_mode {
+        "UTC".to_string()
+    } else {
+        Input::<String>::with_theme(&ColorfulTheme::default())
+            .with_prompt("Your timezone (e.g., America/New_York)")
+            .default("UTC".into())
+            .interact()?
+    };
 
     // 4. Channel selection
     println!();
-    let channel_options = vec!["Telegram", "Discord", "Slack"];
+    let channel_options = vec!["Telegram", "Discord", "Slack", "Web Chat (Browser)", "WebSocket API"];
     let channel_indices = MultiSelect::with_theme(&ColorfulTheme::default())
         .with_prompt("Enable messaging channels? (Space to select, Enter to confirm)")
         .items(&channel_options)
         .interact()?;
 
-    let channels: Vec<String> = channel_indices
+    let mut channels: Vec<String> = channel_indices
         .into_iter()
         .map(|i| channel_options[i].to_string())
         .collect();
+
+    if quick_mode && channels.is_empty() {
+        channels.push("Web Chat (Browser)".to_string());
+    }
+
+    // 4a. DM isolation
+    println!();
+    let dm_options = vec![
+        "Main (one shared DM session)",
+        "Per user (stronger privacy)",
+        "Per channel + user (recommended for multi-user inboxes)",
+    ];
+    let dm_idx = if quick_mode {
+        2
+    } else {
+        Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("DM isolation mode")
+            .items(&dm_options)
+            .default(2)
+            .interact()?
+    };
+
+    let dm_scope = match dm_idx {
+        0 => crate::config::DmScope::Main,
+        1 => crate::config::DmScope::PerPeer,
+        _ => crate::config::DmScope::PerChannelPeer,
+    };
+
+    // 4b. Admin token setup
+    println!();
+    if quick_mode {
+        let token = uuid::Uuid::new_v4().to_string();
+        crate::security::write_admin_token(token.trim())?;
+        let masked = if token.len() > 8 {
+            format!("{}...{}", &token[..4], &token[token.len() - 4..])
+        } else {
+            "****".to_string()
+        };
+        println!("{} {}", style("✅ Admin token saved:").green().bold(), masked);
+        println!("{}", style("You can change it later with: nanobot admin-token set").dim());
+    } else {
+        let set_admin_token = Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Set admin token for /eval and admin actions?")
+            .default(true)
+            .interact()?;
+
+        if set_admin_token {
+            let token = Password::with_theme(&ColorfulTheme::default())
+                .with_prompt("Enter admin token")
+                .with_confirmation("Confirm admin token", "Tokens do not match")
+                .interact()?;
+
+            if !token.trim().is_empty() {
+                crate::security::write_admin_token(token.trim())?;
+                println!("{}", style("✅ Admin token saved").green().bold());
+            } else {
+                println!("{}", style("⚠️  Admin token not set").yellow());
+            }
+        }
+    }
+
+    // 4c. Session secrets setup
+    println!();
+    if quick_mode {
+        let _ = crate::security::get_or_create_session_secrets()?;
+        println!("{}", style("✅ Session tokens configured").green().bold());
+    } else {
+        let set_session_secrets = Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Generate secure session tokens for Web/Gateway?")
+            .default(true)
+            .interact()?;
+
+        if set_session_secrets {
+            let secrets = crate::security::get_or_create_session_secrets()?;
+            println!("{}", style("✅ Session secrets saved").green().bold());
+            println!(
+                "{} {}",
+                style("Gateway token secret:").dim(),
+                &secrets.gateway_session_secret[..8.min(secrets.gateway_session_secret.len())]
+            );
+            println!(
+                "{} {}",
+                style("Web token secret:").dim(),
+                &secrets.web_token_secret[..8.min(secrets.web_token_secret.len())]
+            );
+        }
+    }
+
+    // 4d. Web chat password setup
+    if channels.contains(&"Web Chat (Browser)".to_string()) {
+        println!();
+        if quick_mode {
+            let password = uuid::Uuid::new_v4().to_string();
+            crate::security::write_web_password(&password)?;
+            println!("{} {}", style("✅ Web chat password:").green().bold(), password);
+            println!("{}", style("Save this password; you will need it to log in.").dim());
+        } else {
+            let set_web_password = Confirm::with_theme(&ColorfulTheme::default())
+                .with_prompt("Set Web Chat login password?")
+                .default(true)
+                .interact()?;
+
+            if set_web_password {
+                let password = Password::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Enter Web Chat password")
+                    .with_confirmation("Confirm password", "Passwords do not match")
+                    .interact()?;
+
+                if !password.trim().is_empty() {
+                    crate::security::write_web_password(password.trim())?;
+                    println!("{}", style("✅ Web chat password saved").green().bold());
+                } else {
+                    println!("{}", style("⚠️  Web chat password not set").yellow());
+                }
+            }
+        }
+    }
+
+    // 4e. Ports
+    let web_port = if channels.contains(&"Web Chat (Browser)".to_string()) {
+        if quick_mode {
+            3000
+        } else {
+            Input::<u16>::with_theme(&ColorfulTheme::default())
+                .with_prompt("Web Chat port")
+                .default(3000)
+                .interact()?
+        }
+    } else {
+        3000
+    };
+
+    let server_port = if channels.contains(&"WebSocket API".to_string()) {
+        if quick_mode {
+            3000
+        } else {
+            Input::<u16>::with_theme(&ColorfulTheme::default())
+                .with_prompt("WebSocket API port")
+                .default(3000)
+                .interact()?
+        }
+    } else {
+        3000
+    };
 
     // 5. Provider Selection (new section like OpenClaw)
     println!();
     println!("{}", style("Model/Auth Provider Configuration").bold().cyan());
     let provider_options = vec!["Google Antigravity (OAuth)", "OpenAI", "OpenRouter", "Skip for now"];
-    let provider_idx = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("Select your LLM provider")
-        .items(&provider_options)
-        .default(0)
-        .interact()?;
+    let provider_idx = if quick_mode {
+        let use_oauth = Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Connect Google Antigravity (recommended)?")
+            .default(true)
+            .interact()?;
+        if use_oauth { 0 } else { 3 }
+    } else {
+        Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("Select your LLM provider")
+            .items(&provider_options)
+            .default(0)
+            .interact()?
+    };
     
     let (should_run_oauth, oauth_provider) = match provider_idx {
         0 => (true, Some("antigravity".to_string())),
@@ -136,10 +325,14 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
 
     // 6. Service Installation Prompt
     println!();
-    let should_install_service = Confirm::with_theme(&ColorfulTheme::default())
-        .with_prompt("Install as system service (24/7 operation)?")
-        .default(true)
-        .interact()?;
+    let should_install_service = if quick_mode {
+        true
+    } else {
+        Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Install as system service (24/7 operation)?")
+            .default(true)
+            .interact()?
+    };
 
     // 7. Confirm setup
     println!();
@@ -158,6 +351,15 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
     );
     println!("  Provider: {}", provider_options[provider_idx]);
     println!("  Service: {}", if should_install_service { "Yes" } else { "No" });
+    println!("  DM isolation: {}", dm_options[dm_idx]);
+    println!("  Web Chat: {}", if channels.contains(&"Web Chat (Browser)".to_string()) { "Yes" } else { "No" });
+    println!("  WebSocket API: {}", if channels.contains(&"WebSocket API".to_string()) { "Yes" } else { "No" });
+    if channels.contains(&"Web Chat (Browser)".to_string()) {
+        println!("  Web Chat port: {}", web_port);
+    }
+    if channels.contains(&"WebSocket API".to_string()) {
+        println!("  WebSocket API port: {}", server_port);
+    }
     println!();
 
     let confirm = Confirm::with_theme(&ColorfulTheme::default())
@@ -173,6 +375,12 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
             should_install_service: false,
             should_hatch_tui: false,
             should_start_gateway: false,
+            enable_browser: false,
+            dm_scope,
+            should_start_webchat: false,
+            should_start_server: false,
+            web_port,
+            server_port,
             workspace_dir: PathBuf::from("."),
         });
     }
@@ -216,6 +424,25 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
 
     println!();
     println!("{}", style("✅ Workspace created successfully!").green().bold());
+
+    // Quick start
+    println!();
+    println!("{}", style("Quick Start").bold().cyan());
+    println!("  1) Start the bot gateway (keeps channels connected):");
+    println!("     {}", style("nanobot gateway --channel all").green());
+    if channels.contains(&"Web Chat (Browser)".to_string()) {
+        println!("  2) Start Web Chat (browser UI):");
+        println!("     {}", style(format!("nanobot webchat --port {}", web_port)).green());
+        println!("     {}", style(format!("Open: http://localhost:{}", web_port)).dim());
+        if let Some(ip) = get_local_ip() {
+            println!("     {}", style(format!("Open on LAN: http://{}:{}", ip, web_port)).dim());
+        }
+    }
+    println!("  3) Start WebSocket API:");
+    println!("     {}", style(format!("nanobot server --port {}", server_port)).green());
+    println!();
+    println!("{}", style("Tip:").dim());
+    println!("  If you installed the service, it already runs 24x7.");
     
     // 10. Show pairing system explanation
     if !channels.is_empty() {
@@ -233,14 +460,21 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
     }
     
     // 11. Auto-gateway option
-    let should_start_gateway = if !channels.is_empty() {
-        println!();
-        println!("{}", style("Gateway Launch").bold().cyan());
-        println!("The gateway connects all your messaging channels to the bot.");
-        Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt("Start gateway now? (keeps channels active)")
-            .default(true)
-            .interact()?
+    let has_messaging_channels = channels.iter().any(|c| {
+        c == "Telegram" || c == "Discord" || c == "Slack"
+    });
+    let should_start_gateway = if has_messaging_channels {
+        if quick_mode {
+            true
+        } else {
+            println!();
+            println!("{}", style("Gateway Launch").bold().cyan());
+            println!("The gateway connects all your messaging channels to the bot.");
+            Confirm::with_theme(&ColorfulTheme::default())
+                .with_prompt("Start gateway now? (keeps channels active)")
+                .default(true)
+                .interact()?
+        }
     } else {
         false
     };
@@ -250,13 +484,24 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
         println!();
         println!("{}", style("Start TUI (best option!)").bold());
         println!("This is the defining action that makes your agent YOU.");
-        Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt("Hatch in TUI now? (recommended)")
-            .default(true)
-            .interact()?
+        if quick_mode {
+            true
+        } else {
+            Confirm::with_theme(&ColorfulTheme::default())
+                .with_prompt("Hatch in TUI now? (recommended)")
+                .default(true)
+                .interact()?
+        }
     } else {
         false
     };
+
+    // 13. Browser Capability
+    println!();
+    let enable_browser = Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Enable browser capabilities? (headless Chrome)")
+        .default(true)
+        .interact()?;
 
     Ok(SetupResult {
         should_run_oauth,
@@ -264,6 +509,12 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
         should_install_service,
         should_hatch_tui,
         should_start_gateway,
+        enable_browser,
+        dm_scope,
+        should_start_webchat: channels.contains(&"Web Chat (Browser)".to_string()),
+        should_start_server: channels.contains(&"WebSocket API".to_string()),
+        web_port,
+        server_port,
         workspace_dir,
     })
 }
@@ -287,6 +538,17 @@ fn print_welcome_banner() {
     println!();
 }
 
+fn get_local_ip() -> Option<String> {
+    use std::net::UdpSocket;
+
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    if socket.connect("8.8.8.8:80").is_err() {
+        return None;
+    }
+    let addr = socket.local_addr().ok()?;
+    Some(addr.ip().to_string())
+}
+
 fn print_security_warning() {
     println!();
     println!("{}", style("⚠️  Security Warning").bold().yellow());
@@ -305,44 +567,4 @@ fn print_security_warning() {
     println!();
 }
 
-fn print_completion_message(workspace_dir: &std::path::Path) {
-    println!();
-    println!(
-        "{}",
-        style("✨ ═══════════════════════════════════════════ ✨").green()
-    );
-    println!("{}", style("   Setup Complete!").bold().green());
-    println!(
-        "{}",
-        style("✨ ═══════════════════════════════════════════ ✨").green()
-    );
-    println!();
-    println!("Workspace: {}", style(workspace_dir.display()).cyan());
-    println!();
-    println!("{}", style("Try these commands:").bold());
-    println!(
-        "  {} - Start chatting in terminal",
-        style("flowbot chat").cyan()
-    );
-    println!("  {} - Start API server", style("flowbot server").cyan());
-    println!(
-        "  {} - Launch Telegram bot",
-        style("flowbot gateway telegram").cyan()
-    );
-    println!();
-    println!("{}", style("Edit your personality:").bold());
-    println!(
-        "  {} - Change your voice/tone",
-        style("flowbot workspace:edit soul").cyan()
-    );
-    println!(
-        "  {} - Update your identity",
-        style("flowbot workspace:edit identity").cyan()
-    );
-    println!();
-    println!("📚 Your personality files:");
-    println!("   • SOUL.md - Your voice and personality");
-    println!("   • IDENTITY.md - Your name, emoji, and vibe");
-    println!("   • USER.md - Info about your human");
-    println!();
-}
+// Completion message helper removed (unused).

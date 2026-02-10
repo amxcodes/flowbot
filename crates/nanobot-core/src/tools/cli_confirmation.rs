@@ -2,7 +2,7 @@ use super::confirmation::{ConfirmationAdapter, ConfirmationRequest, Confirmation
 use anyhow::Result;
 use async_trait::async_trait;
 use colored::Colorize;
-use std::io::{self, Write};
+use std::io::{self, Write, IsTerminal};
 
 /// CLI confirmation adapter using terminal prompts
 pub struct CliConfirmationAdapter;
@@ -106,6 +106,10 @@ impl ConfirmationAdapter for CliConfirmationAdapter {
 
     fn name(&self) -> &str {
         "CLI"
+    }
+
+    async fn is_available(&self) -> bool {
+        io::stdin().is_terminal()
     }
 }
 

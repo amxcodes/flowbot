@@ -6,7 +6,7 @@ use teloxide::prelude::*;
 use tokio::sync::mpsc;
 use async_trait::async_trait;
 use std::sync::Arc;
-use super::adapter::{ChannelAdapter, ChannelMessage};
+use super::adapter::{build_session_id, ChannelAdapter, ChannelMessage};
 use super::registry::ChannelRegistry;
 
 /// Telegram bot configuration
@@ -14,6 +14,8 @@ use super::registry::ChannelRegistry;
 pub struct TelegramConfig {
     pub token: String,
     pub allowed_users: Option<Vec<i64>>,
+    #[serde(default)]
+    pub dm_scope: crate::config::DmScope,
 }
 
 /// Telegram bot instance (Refactored to use Actor Model)
@@ -22,6 +24,9 @@ pub struct TelegramBot {
     config: TelegramConfig,
     agent_tx: mpsc::Sender<crate::agent::AgentMessage>,
     registry: Arc<ChannelRegistry>,
+    confirmation_service: Arc<tokio::sync::Mutex<crate::tools::ConfirmationService>>,
+    confirmation_txs: Arc<tokio::sync::Mutex<std::collections::HashMap<i64, mpsc::Sender<crate::tools::telegram_confirmation::CallbackResponse>>>>,
+    confirmation_ready: Arc<tokio::sync::Mutex<std::collections::HashSet<i64>>>,
 }
 
 impl TelegramBot {
@@ -30,6 +35,7 @@ impl TelegramBot {
         config: TelegramConfig,
         agent_tx: mpsc::Sender<crate::agent::AgentMessage>,
         registry: Arc<ChannelRegistry>,
+        confirmation_service: Arc<tokio::sync::Mutex<crate::tools::ConfirmationService>>,
     ) -> Self {
         let bot = Bot::new(&config.token);
         Self {
@@ -37,8 +43,12 @@ impl TelegramBot {
             config,
             agent_tx,
             registry,
+            confirmation_service,
+            confirmation_txs: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            confirmation_ready: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
         }
     }
+
 
     /// Start the bot with dual-task architecture (Inbound + Outbound)
     pub async fn run(self) -> Result<()> {
@@ -46,6 +56,10 @@ impl TelegramBot {
         let agent_tx = self.agent_tx.clone();
         let allowed_users = self.config.allowed_users.clone();
         let registry = self.registry.clone();
+        let confirmation_service = self.confirmation_service.clone();
+        let confirmation_txs = self.confirmation_txs.clone();
+        let confirmation_ready = self.confirmation_ready.clone();
+        let bot_token = self.config.token.clone();
 
         // 1. Create Inbox
         let (inbox_tx, mut inbox_rx) = mpsc::channel::<ChannelMessage>(100);
@@ -73,10 +87,42 @@ impl TelegramBot {
         teloxide::repl(bot, move |bot: Bot, msg: Message| {
             let agent_tx = agent_tx.clone();
             let _allowed_users = allowed_users.clone();
+            let confirmation_service = confirmation_service.clone();
+            let confirmation_txs = confirmation_txs.clone();
+            let confirmation_ready = confirmation_ready.clone();
+            let bot_token = bot_token.clone();
             
             async move {
                 let user_id = msg.chat.id.0.to_string();
                 let username = msg.chat.username().map(|s| s.to_string());
+                let chat_id = msg.chat.id.0;
+
+                // Ensure confirmation adapter for this chat
+                {
+                    let mut ready = confirmation_ready.lock().await;
+                    if !ready.contains(&chat_id) {
+                        let (callback_tx, callback_rx) = mpsc::channel(10);
+                        let (pending_tx, _pending_rx) = mpsc::channel(10);
+                        let channel = format!("telegram:{}", chat_id);
+
+                        let adapter = crate::tools::telegram_confirmation::TelegramConfirmationAdapter::new(
+                            bot_token.clone(),
+                            chat_id,
+                            callback_rx,
+                            pending_tx,
+                            channel,
+                        );
+
+                        {
+                            let mut service = confirmation_service.lock().await;
+                            service.register_adapter(Box::new(adapter));
+                        }
+
+                        let mut txs = confirmation_txs.lock().await;
+                        txs.insert(chat_id, callback_tx);
+                        ready.insert(chat_id);
+                    }
+                }
 
                 // Pairing Logic
                 match crate::pairing::is_authorized("telegram", &user_id).await {
@@ -101,15 +147,60 @@ impl TelegramBot {
 
                 // Normal Message Handling
                 let text = match msg.text() { Some(t) => t.to_string(), None => return Ok(()) };
+
+                if let Some((allowed, request_id)) = parse_confirmation_response(&text) {
+                    let tx = {
+                        let txs = confirmation_txs.lock().await;
+                        txs.get(&chat_id).cloned()
+                    };
+
+                    if let Some(sender) = tx {
+                        let _ = sender
+                            .send(crate::tools::telegram_confirmation::CallbackResponse {
+                                request_id,
+                                allowed,
+                            })
+                            .await;
+                        let _ = bot.send_message(msg.chat.id, "✅ Confirmation received.").await;
+                    } else {
+                        let _ = bot.send_message(msg.chat.id, "❌ No pending confirmation.").await;
+                    }
+                    return Ok(());
+                }
+
+                if let Some(token) = text.strip_prefix("/set_admin_token ") {
+                    let token = token.trim();
+                    if token.is_empty() {
+                        let _ = bot.send_message(msg.chat.id, "❌ Token cannot be empty").await;
+                        return Ok(());
+                    }
+                    if let Err(e) = crate::security::write_admin_token(token) {
+                        let _ = bot.send_message(msg.chat.id, format!("❌ Failed to save token: {}", e)).await;
+                        return Ok(());
+                    }
+                    let _ = bot.send_message(msg.chat.id, "✅ Admin token saved").await;
+                    return Ok(());
+                }
                 
                 // Typing
                 let _ = bot.send_chat_action(msg.chat.id, teloxide::types::ChatAction::Typing).await;
 
                 // Send to Agent
                 let (response_tx, mut response_rx) = mpsc::channel(100);
+                let user_id = msg
+                    .from()
+                    .map(|u| u.id.0.to_string())
+                    .unwrap_or_else(|| msg.chat.id.0.to_string());
+                let session_id = build_session_id(
+                    "telegram",
+                    &msg.chat.id.0.to_string(),
+                    &user_id,
+                    self.config.dm_scope,
+                    msg.chat.is_private(),
+                );
                 let agent_msg = crate::agent::AgentMessage {
-                    session_id: format!("telegram:{}", msg.chat.id),
-                    tenant_id: format!("telegram:{}", msg.chat.id), // Use Chat ID as Tenant ID
+                    session_id: session_id.clone(),
+                    tenant_id: session_id,
                     content: text,
                     response_tx,
                 };
@@ -133,6 +224,24 @@ impl TelegramBot {
         // If repl exits, abort outbound
         outbound_handle.abort();
         Ok(())
+    }
+}
+
+fn parse_confirmation_response(text: &str) -> Option<(bool, String)> {
+    let trimmed = text.trim();
+    let (allowed, rest) = if let Some(rest) = trimmed.strip_prefix("/allow ") {
+        (true, rest)
+    } else if let Some(rest) = trimmed.strip_prefix("/deny ") {
+        (false, rest)
+    } else {
+        return None;
+    };
+
+    let request_id = rest.trim();
+    if request_id.is_empty() {
+        None
+    } else {
+        Some((allowed, request_id.to_string()))
     }
 }
 
@@ -163,6 +272,7 @@ mod tests {
         let config = TelegramConfig {
             token: "test_token".to_string(),
             allowed_users: Some(vec![123456789]),
+            dm_scope: crate::config::DmScope::Main,
         };
         assert_eq!(config.token, "test_token");
         assert!(config.allowed_users.unwrap().contains(&123456789));

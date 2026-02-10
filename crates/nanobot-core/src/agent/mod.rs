@@ -1,5 +1,6 @@
 use crate::antigravity::AntigravityClient;
 use crate::context::ContextTree;
+use crate::events::AgentEvent;
 use anyhow::Result;
 use futures::StreamExt;
 use rig::OneOrMany;
@@ -144,6 +145,43 @@ fn estimate_message_tokens(msg: &Message) -> usize {
     }
 }
 
+fn prune_tool_outputs(chat_history: &mut Vec<Message>, max_chars: usize) {
+    let head = max_chars / 2;
+    let tail = max_chars.saturating_sub(head);
+
+    for msg in chat_history.iter_mut() {
+        if let Message::User { content } = msg {
+            for part in content.iter_mut() {
+                if let UserContent::Text(text) = part {
+                    if text.text.starts_with("Tool '") && text.text.contains("Output:") {
+                        if text.text.len() > max_chars {
+                            let head_part = &text.text[..head.min(text.text.len())];
+                            let tail_part = &text.text[text.text.len().saturating_sub(tail)..];
+                            text.text = format!(
+                                "{}\n... [tool output truncated] ...\n{}",
+                                head_part,
+                                tail_part
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn is_tool_output_msg(msg: &Message) -> bool {
+    match msg {
+        Message::User { content } => content.iter().any(|part| match part {
+            UserContent::Text(text) => {
+                text.text.starts_with("Tool '") && text.text.contains("Output:")
+            }
+            _ => false,
+        }),
+        _ => false,
+    }
+}
+
 pub struct AgentLoop {
     provider: std::sync::Arc<tokio::sync::RwLock<AgentProvider>>,
     config: config::Config,
@@ -158,11 +196,16 @@ pub struct AgentLoop {
     #[allow(dead_code)]
     workspace_watcher: Option<crate::memory::WorkspaceWatcher>,
     personality: Option<personality::PersonalityContext>,
-    cron_event_rx: Option<tokio::sync::mpsc::Receiver<crate::cron::CronEvent>>,
+    system_prompt_override: Option<String>,
+    agent_event_rx: Option<tokio::sync::mpsc::Receiver<AgentEvent>>,
     last_interaction:
         std::sync::Arc<tokio::sync::Mutex<Option<(String, mpsc::Sender<StreamChunk>)>>>,
+    session_senders: std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, mpsc::Sender<StreamChunk>>>>,
     permission_manager: std::sync::Arc<tokio::sync::Mutex<crate::tools::PermissionManager>>,
+    tool_policy: std::sync::Arc<crate::tools::ToolPolicy>,
+    confirmation_service: std::sync::Arc<tokio::sync::Mutex<crate::tools::ConfirmationService>>,
     resource_monitor: std::sync::Arc<crate::system::resources::ResourceMonitor>,
+    persistence: std::sync::Arc<crate::persistence::PersistenceManager>,
     #[cfg(feature = "browser")]
     browser_client: Option<crate::browser::BrowserClient>,
     active_tasks: std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, tokio::task::AbortHandle>>>,
@@ -298,6 +341,13 @@ impl AgentLoop {
 
     pub async fn new() -> Result<Self> {
         let config = config::Config::load()?;
+
+        #[cfg(not(feature = "browser"))]
+        if config.browser.is_some() {
+            tracing::warn!(
+                "Browser config present but binary built without 'browser' feature"
+            );
+        }
         
         // Initial provider creation
         let indices_map = std::collections::HashMap::new();
@@ -315,17 +365,22 @@ impl AgentLoop {
             db_path.to_str().ok_or_else(|| anyhow::anyhow!("Invalid db path"))?
         )?);
 
-        // Create channel for cron events
-        let (cron_event_tx, cron_event_rx) = tokio::sync::mpsc::channel(100);
+        // Create channel for agent events (cron + subagent updates)
+        let (agent_event_tx, agent_event_rx) = tokio::sync::mpsc::channel(100);
 
         // Initialize Cron Scheduler
         let cron_scheduler =
-            crate::cron::CronScheduler::new(db_path.clone(), cron_event_tx).await?;
+            crate::cron::CronScheduler::new(db_path.clone(), agent_event_tx.clone()).await?;
         cron_scheduler.start().await?;
 
         // Initialize Agent Manager
         let agent_manager = std::sync::Arc::new(crate::gateway::agent_manager::AgentManager::new());
         agent_manager.load_registry().await?; // Restore persistent state
+        agent_manager.set_event_sender(agent_event_tx.clone()).await;
+        let recovered = agent_manager.recover_sessions().await?;
+        if recovered > 0 {
+            tracing::info!("Recovered {} running subagent session(s)", recovered);
+        }
         agent_manager.start_cleanup_task();
 
         // Initialize Memory Manager
@@ -366,7 +421,7 @@ impl AgentLoop {
         let workspace_watcher = match crate::memory::WorkspaceWatcher::new(
             watch_path.clone(),
             memory_manager.clone(),
-            None, // Default tenant
+            Some("system".to_string()),
         ) {
             Ok(w) => {
                 println!("👀 File watcher active on {:?}", watch_path);
@@ -425,6 +480,17 @@ impl AgentLoop {
             crate::tools::PermissionManager::new(security_profile)
         ));
 
+        let tool_policy = std::sync::Arc::new(crate::tools::ToolPolicy::permissive());
+
+        let confirmation_service = std::sync::Arc::new(tokio::sync::Mutex::new(
+            crate::tools::ConfirmationService::new(),
+        ));
+
+        {
+            let mut service = confirmation_service.lock().await;
+            service.register_adapter(Box::new(crate::tools::cli_confirmation::CliConfirmationAdapter::new()));
+        }
+
         // Initialize Resource Monitor
         let resource_monitor = std::sync::Arc::new(crate::system::resources::ResourceMonitor::new());
         resource_monitor.start_monitoring().await;
@@ -467,6 +533,12 @@ impl AgentLoop {
             None
         };
 
+        let persistence_db_path = db_path.clone();
+        let persistence = std::sync::Arc::new(crate::persistence::PersistenceManager::new(
+            persistence_db_path,
+        ));
+        persistence.init()?;
+
         Ok(Self {
             provider,
             config,
@@ -479,32 +551,52 @@ impl AgentLoop {
             mcp_manager,
             workspace_watcher,
             personality,
-            cron_event_rx: Some(cron_event_rx),
+            system_prompt_override: None,
+            agent_event_rx: Some(agent_event_rx),
             last_interaction: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
+            session_senders: std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
             permission_manager,
+            tool_policy,
+            confirmation_service,
             resource_monitor,
+            persistence,
             #[cfg(feature = "browser")]
             browser_client,
             active_tasks: std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         })
     }
 
+    pub fn confirmation_service(
+        &self,
+    ) -> std::sync::Arc<tokio::sync::Mutex<crate::tools::ConfirmationService>> {
+        self.confirmation_service.clone()
+    }
+
+    pub fn set_system_prompt_override(&mut self, prompt: Option<String>) {
+        self.system_prompt_override = prompt;
+    }
+
+    pub fn set_tool_policy(&mut self, policy: crate::tools::ToolPolicy) {
+        self.tool_policy = std::sync::Arc::new(policy);
+    }
+
     pub async fn run(mut self, mut rx: mpsc::Receiver<AgentMessage>) {
-        // Take ownership of cron_event_rx
-        let cron_event_rx = self.cron_event_rx.take();
+        // Take ownership of agent_event_rx
+        let agent_event_rx = self.agent_event_rx.take();
 
         // Wrap self in Arc to share with the cron handler task
         let agent = std::sync::Arc::new(self);
 
-        // Spawn cron event handler task
-        if let Some(mut event_rx) = cron_event_rx {
+        // Spawn agent event handler task
+        if let Some(mut event_rx) = agent_event_rx {
             let agent_inner = agent.clone();
             tokio::spawn(async move {
-                println!("🕐 Cron event handler started");
+                println!("🕐 Agent event handler started");
                 while let Some(event) = event_rx.recv().await {
                     match event {
-                        crate::cron::CronEvent::SystemEvent { job_id, text } => {
-                            println!("📅 [Cron] SystemEvent from job {}: {}", job_id, text);
+                        AgentEvent::SystemEvent { job_id, text } => {
+                            let source = job_id.clone().unwrap_or_else(|| "unknown".to_string());
+                            println!("📅 [AgentEvent] SystemEvent from {}: {}", source, text);
 
                             // Try to inject into last active session
                             let interaction = {
@@ -527,21 +619,22 @@ impl AgentLoop {
                                 );
                             }
                         }
-                        crate::cron::CronEvent::AgentTurn {
+                        AgentEvent::AgentTurn {
                             job_id,
                             message,
                             model,
                             ..
                         } => {
+                            let source = job_id.clone().unwrap_or_else(|| "unknown".to_string());
                             println!(
-                                "📅 [Cron] AgentTurn from job {}: {} (model: {:?})",
-                                job_id, message, model
+                                "📅 [AgentEvent] AgentTurn from {}: {} (model: {:?})",
+                                source, message, model
                             );
 
                             // Spawn task to execute isolated agent
                             let agent_mgr = agent_inner.agent_manager.clone();
                             let last_int = agent_inner.last_interaction.clone();
-                            let job_id_clone = job_id.clone();
+                            let job_id_clone = job_id.clone().unwrap_or_else(|| "unknown".to_string());
                             let message_clone = message.clone();
 
                             tokio::spawn(async move {
@@ -626,9 +719,34 @@ impl AgentLoop {
                                 }
                             });
                         }
+                        AgentEvent::SessionMessage { session_id, text } => {
+                            let tx = {
+                                let senders = agent_inner.session_senders.lock().await;
+                                senders.get(&session_id).cloned()
+                            };
+
+                            if let Some(response_tx) = tx {
+                                let _ = response_tx
+                                    .send(crate::agent::StreamChunk::TextDelta(format!(
+                                        "\n\n{}\n\n",
+                                        text
+                                    )))
+                                    .await;
+                                if let Err(e) = agent_inner.save_message(&session_id, "assistant", &text) {
+                                    eprintln!("Failed to persist injected message: {}", e);
+                                }
+                                if let Err(e) = agent_inner.persistence.save_message(&session_id, "assistant", &text) {
+                                    eprintln!("Failed to persist injected message to history: {}", e);
+                                }
+                            } else {
+                                println!(
+                                    "⚠️ No active session sender found for SessionMessage injection."
+                                );
+                            }
+                        }
                     }
                 }
-                println!("🕐 Cron event handler stopped");
+                println!("🕐 Agent event handler stopped");
             });
         }
 
@@ -656,11 +774,20 @@ impl AgentLoop {
                     *last = Some((msg.session_id.clone(), msg.response_tx.clone()));
                 }
 
+                // Track active session sender for targeted injections
+                {
+                    let mut senders = agent_clone.session_senders.lock().await;
+                    senders.insert(msg.session_id.clone(), msg.response_tx.clone());
+                }
+
                 agent_clone.process_streaming(msg).await;
 
                 // Cleanup task from map upon completion
                 let mut tasks = agent_clone.active_tasks.lock().await;
                 tasks.remove(&session_id);
+
+                let mut senders = agent_clone.session_senders.lock().await;
+                senders.remove(&session_id);
             });
 
             // Store handle
@@ -697,6 +824,10 @@ impl AgentLoop {
             eprintln!("Failed to save user message: {}", e);
         }
 
+        if let Err(e) = self.persistence.save_message(&msg.session_id, "user", &msg.content) {
+            eprintln!("Failed to persist user message: {}", e);
+        }
+
         let mut chat_history = self.get_conversation_history(&msg.session_id);
 
         // Apply adaptive context history limit
@@ -706,50 +837,76 @@ impl AgentLoop {
             chat_history = chat_history.into_iter().skip(skip).collect();
         }
 
-        // Apply Token Limit (Heuristic) - Hard cap at 32k tokens to prevent overflow
-        // Logic: Drop oldest messages until we fit
-        let total_tokens: usize = chat_history.iter().map(estimate_message_tokens).sum();
+        prune_tool_outputs(&mut chat_history, 4000);
+
+        // Apply Token Limit (Hybrid) - Heuristic pruning + summary fallback
         let token_limit = self.config.context_token_limit;
-        
+        let total_tokens: usize = chat_history.iter().map(estimate_message_tokens).sum();
+
         if total_tokens > token_limit {
-             tracing::warn!("⚠️ Context exceeding token limit (~{} > {}). Summarizing...", total_tokens, token_limit);
-             
-             // Strategy: Summarize the first 50% of history into a single system message
-             let split_idx = chat_history.len() / 2;
-             if split_idx > 0 {
-                 let older_msgs = chat_history.drain(0..split_idx).collect::<Vec<_>>();
-                 
-                 // Create temporary provider for summarization (avoid deadlock by cloning provider beforehand if needed, 
-                 // but here we can just use the read lock or a separate lightweight request)
-                 // For simplicity in this step, we'll try to just perform a direct summarization if possible, 
-                 // or just execute a truncation with a system note if summarization is too expensive inline.
-                 //
-                 // Better: Spawn a summarization task? No, we need it now. 
-                 // Let's do a meaningful truncation -> "Summary: [Old context removed]" 
-                 // But user asked for *Summarization*.
-                 
-                 // We will effectively collapse them into a single User message saying:
-                 // "Here is a summary of the previous conversation: ..."
-                 // To do this properly requires an LLM call. 
-                 
-                 // FOR NOW: We will implement the PLUMBING for it. 
-                 // 1. Convert older_msgs to string
-                 // 2. Call internal summarize (we need to implement `summarize` method on AgentLoop)
-                 
-                 match self.summarize_messages(&older_msgs).await {
-                     Ok(summary) => {
-                         // Insert summary as a new User message at the start
-                         chat_history.insert(0, Message::User { 
-                             content: OneOrMany::one(UserContent::Text(Text { text: format!("(Prior Verification Summary)\n{}", summary) })) 
-                         });
-                         tracing::info!("✅ Compressed {} messages into summary", older_msgs.len());
-                     }
-                     Err(e) => {
-                         tracing::error!("Failed to summarize: {}. Falling back to truncation.", e);
-                         // Fallback is already done by drain, just didn't insert summary.
-                     }
-                 }
-             }
+            tracing::warn!(
+                "⚠️ Context exceeding token limit (~{} > {}). Pruning...",
+                total_tokens,
+                token_limit
+            );
+
+            let large_threshold = std::cmp::max(token_limit / 4, 800);
+            let mut items: Vec<(Message, usize, bool, bool)> = chat_history
+                .into_iter()
+                .map(|msg| {
+                    let tokens = estimate_message_tokens(&msg);
+                    let is_tool = is_tool_output_msg(&msg);
+                    let is_large = tokens > large_threshold;
+                    (msg, tokens, is_tool, is_large)
+                })
+                .collect();
+
+            let mut total = total_tokens;
+            let mut dropped: Vec<Message> = Vec::new();
+            let mut kept: Vec<(Message, usize)> = Vec::new();
+
+            for (msg, tokens, is_tool, is_large) in items.drain(..) {
+                if total > token_limit && (is_tool || is_large) {
+                    total = total.saturating_sub(tokens);
+                    dropped.push(msg);
+                } else {
+                    kept.push((msg, tokens));
+                }
+            }
+
+            if total > token_limit {
+                let mut remaining: Vec<Message> = Vec::new();
+                for (msg, tokens) in kept.into_iter() {
+                    if total > token_limit {
+                        total = total.saturating_sub(tokens);
+                        dropped.push(msg);
+                    } else {
+                        remaining.push(msg);
+                    }
+                }
+                chat_history = remaining;
+            } else {
+                chat_history = kept.into_iter().map(|(msg, _)| msg).collect();
+            }
+
+            if !dropped.is_empty() {
+                match self.summarize_messages(&dropped).await {
+                    Ok(summary) => {
+                        chat_history.insert(
+                            0,
+                            Message::User {
+                                content: OneOrMany::one(UserContent::Text(Text {
+                                    text: format!("(Context Summary)\n{}", summary),
+                                })),
+                            },
+                        );
+                        tracing::info!("✅ Compressed {} messages into summary", dropped.len());
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to summarize: {}. Falling back to pruning only.", e);
+                    }
+                }
+            }
         }
 
         chat_history.push(Message::User {
@@ -773,7 +930,13 @@ impl AgentLoop {
                 break;
             }
 
-            let system_msg = if let Some(ref personality) = self.personality {
+            let system_msg = if let Some(ref override_prompt) = self.system_prompt_override {
+                format!(
+                    "{}\n\n# Available Tools\n{}",
+                    override_prompt,
+                    crate::tools::executor::get_tool_descriptions()
+                )
+            } else if let Some(ref personality) = self.personality {
                 format!(
                     "{}\n\n# Available Tools\n{}",
                     personality.to_preamble(),
@@ -858,6 +1021,13 @@ impl AgentLoop {
 
             let mut tool_calls = Vec::new();
             let mut current_text = String::new();
+            let assistant_message_id = match self.persistence.start_message(&msg.session_id, "assistant") {
+                Ok(id) => Some(id),
+                Err(e) => {
+                    eprintln!("Failed to start assistant persistence: {}", e);
+                    None
+                }
+            };
 
             let mut thinking = false;
 
@@ -868,6 +1038,10 @@ impl AgentLoop {
                             StreamedAssistantContent::Text(text) => {
                                 let content = text.text.clone();
                                 current_text.push_str(&content);
+
+                                if let Some(message_id) = assistant_message_id {
+                                    let _ = self.persistence.append_message_content(message_id, &content);
+                                }
                                 
                                 // Simple parser for <think> blocks
                                 // Note: detailed split-tag handling omitted for brevity, assumes tags arrive mostly intact
@@ -967,10 +1141,13 @@ impl AgentLoop {
                             Some(&self.agent_manager),
                             Some(&self.memory_manager),
                             Some(&*self.permission_manager),
+                            Some(&self.tool_policy),
+                            Some(&*self.confirmation_service),
                             self.skill_loader.as_ref(),
                             #[cfg(feature = "browser")]
                             self.browser_client.as_ref(),
                             Some(&msg.tenant_id),
+                            self.mcp_manager.as_ref(), // Pass MCP manager
                         )
                         .await
                         {
@@ -1001,18 +1178,40 @@ impl AgentLoop {
     }
 
     fn save_message(&self, session_id: &str, role: &str, content: &str) -> Result<()> {
-        // Get current active leaf as parent
-        let parent_id = self.context_tree.get_active_leaf(session_id)?;
-        
-        // Add message to tree
-        self.context_tree.add_message(
-            session_id,
-            role,
-            content,
-            parent_id,
-            None, // model can be added later if needed
-        )?;
-        
+        self.context_tree.with_transaction(|tx| {
+            let parent_id = crate::context::tree::ContextTree::get_active_leaf_tx(tx, session_id)?;
+            crate::context::tree::ContextTree::add_message_in_tx(
+                tx,
+                session_id,
+                role,
+                content,
+                parent_id,
+                None,
+            )?;
+            crate::persistence::PersistenceManager::save_message_tx(
+                tx,
+                session_id,
+                role,
+                content,
+            )?;
+            Ok(())
+        })
+        ?;
+
+        const MAX_NODES: usize = 2000;
+        const KEEP_RECENT: usize = 1500;
+        if let Ok(count) = self.context_tree.count_session_nodes(session_id) {
+            if count > MAX_NODES {
+                if let Ok(removed) = self.context_tree.prune_session(session_id, MAX_NODES, KEEP_RECENT) {
+                    tracing::info!(
+                        "Context prune removed {} nodes for session {}",
+                        removed,
+                        session_id
+                    );
+                }
+            }
+        }
+
         Ok(())
     }
 

@@ -30,7 +30,7 @@ impl WorkspaceWatcher {
 
         // Spawn async event handler
         let root = root_path.clone();
-        let tenant = tenant_id.unwrap_or_else(|| "default".to_string());
+        let tenant = tenant_id.ok_or_else(|| anyhow::anyhow!("tenant_id is required"))?;
         let tenant_clone = tenant.clone();
         
         tokio::spawn(async move {

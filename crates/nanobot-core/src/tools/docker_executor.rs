@@ -116,7 +116,8 @@ mod tests {
             return Ok(());
         }
 
-        let result = execute_in_container("echo", &["hello".to_string()], None).await?;
+        let config = SandboxConfig::default();
+        let result = execute_in_container("echo", &["hello".to_string()], &config).await?;
         assert!(result.contains("hello"));
         Ok(())
     }
@@ -129,7 +130,8 @@ mod tests {
         }
 
         // Try to access /etc/passwd (should fail due to read-only filesystem)
-        let result = execute_in_container("ls", &["/workspace".to_string()], None).await;
+        let config = SandboxConfig::default();
+        let result = execute_in_container("ls", &["/workspace".to_string()], &config).await;
         // Should succeed in listing workspace
         assert!(result.is_ok());
         Ok(())

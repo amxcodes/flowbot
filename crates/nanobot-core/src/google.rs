@@ -168,7 +168,7 @@ fn build_gemini_request(request: &CompletionRequest) -> serde_json::Value {
     }).collect();
 
     // Add system instruction if preamble exists
-    let mut final_contents = contents;
+    let final_contents = contents;
     
     // Note: Gemini API puts system instruction adjacent to contents, not inside.
     let system_instruction = if let Some(preamble) = &request.preamble {

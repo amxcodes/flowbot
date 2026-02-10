@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 use anyhow::Result;
 
+use crate::config::DmScope;
+
 /// Unified interface for all communication channels
 /// Each channel (Web, Slack, Discord, Telegram) implements this trait
 #[async_trait]
@@ -44,6 +46,24 @@ impl ChannelMessage {
     /// Generate a unique session key for routing
     pub fn session_key(&self) -> String {
         format!("{}:user:{}", self.channel_id, self.user_id)
+    }
+}
+
+pub fn build_session_id(
+    channel: &str,
+    channel_id: &str,
+    user_id: &str,
+    dm_scope: DmScope,
+    is_dm: bool,
+) -> String {
+    if !is_dm {
+        return format!("{}:{}", channel, channel_id);
+    }
+
+    match dm_scope {
+        DmScope::Main => format!("{}:main", channel),
+        DmScope::PerPeer => format!("{}:dm:{}", channel, user_id),
+        DmScope::PerChannelPeer => format!("{}:{}:dm:{}", channel, channel_id, user_id),
     }
 }
 

@@ -2,8 +2,12 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 use uuid::Uuid;
+
+use crate::events::AgentEvent;
 
 /// Session types for multi-agent orchestration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +33,10 @@ pub struct AgentSession {
     pub parent_session_id: Option<String>,
     pub cleanup_policy: CleanupPolicy,
     pub created_at: u64,
+    #[serde(default)]
+    pub initial_prompt: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 /// Task delegation for subagents
@@ -59,6 +67,7 @@ pub struct AgentManager {
     tasks: Arc<Mutex<HashMap<String, SessionTask>>>,
     /// Subagent hierarchy registry (parent_id -> Vec<child_id>)
     hierarchy: Arc<Mutex<HashMap<String, Vec<String>>>>,
+    event_tx: Arc<Mutex<Option<mpsc::Sender<AgentEvent>>>>,
 }
 
 impl AgentManager {
@@ -67,6 +76,47 @@ impl AgentManager {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             tasks: Arc::new(Mutex::new(HashMap::new())),
             hierarchy: Arc::new(Mutex::new(HashMap::new())),
+            event_tx: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub async fn set_event_sender(&self, sender: mpsc::Sender<AgentEvent>) {
+        let mut tx = self.event_tx.lock().await;
+        *tx = Some(sender);
+    }
+
+    pub async fn broadcast_to_session(&self, session_id: &str, text: String) -> Result<()> {
+        let tx = {
+            let guard = self.event_tx.lock().await;
+            guard.clone()
+        };
+
+        if let Some(sender) = tx {
+            sender
+                .send(AgentEvent::SessionMessage {
+                    session_id: session_id.to_string(),
+                    text,
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to send session message: {}", e))?;
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Agent event channel not configured"))
+        }
+    }
+
+    pub async fn broadcast_to_parent(&self, child_session_id: &str, text: String) -> Result<()> {
+        let parent_id = {
+            let sessions = self.sessions.lock().await;
+            sessions
+                .get(child_session_id)
+                .and_then(|s| s.parent_session_id.clone())
+        };
+
+        if let Some(parent_session_id) = parent_id {
+            self.broadcast_to_session(&parent_session_id, text).await
+        } else {
+            Err(anyhow::anyhow!("Parent session not found for {}", child_session_id))
         }
     }
 
@@ -132,6 +182,8 @@ impl AgentManager {
         session_type: SessionType,
         parent_session_id: Option<String>,
         cleanup_policy: CleanupPolicy,
+        initial_prompt: Option<String>,
+        model: Option<String>,
     ) -> Result<AgentSession> {
         let session = AgentSession {
             id: Uuid::new_v4().to_string(),
@@ -142,6 +194,8 @@ impl AgentManager {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
+            initial_prompt,
+            model,
         };
 
         {
@@ -160,6 +214,7 @@ impl AgentManager {
         task: String,
         _label: Option<String>,
         cleanup_policy: CleanupPolicy,
+        model: Option<String>,
     ) -> Result<(AgentSession, SessionTask)> {
         // Create isolated session
         let session = self
@@ -167,6 +222,8 @@ impl AgentManager {
                 SessionType::Isolated,
                 Some(parent_session_id.clone()),
                 cleanup_policy,
+                Some(task.clone()),
+                model,
             )
             .await?;
 
@@ -200,7 +257,98 @@ impl AgentManager {
 
         self.save_registry().await?;
 
+        self.spawn_task_execution(session.clone(), task_obj.clone());
+
         Ok((session, task_obj))
+    }
+
+    fn spawn_task_execution(&self, session: AgentSession, task: SessionTask) {
+        let manager = self.clone();
+        tokio::spawn(async move {
+            let _ = manager
+                .update_task_status(&task.id, TaskStatus::Running, None)
+                .await;
+
+            let _ = manager
+                .broadcast_to_parent(
+                    &session.id,
+                    format!("[Subagent {}] Thinking...", session.id),
+                )
+                .await;
+
+            let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<String>();
+            let progress_manager = manager.clone();
+            let progress_session_id = session.id.clone();
+            let progress_handle = tokio::spawn(async move {
+                let mut buffer = String::new();
+                let mut last_flush = Instant::now();
+
+                while let Some(chunk) = progress_rx.recv().await {
+                    buffer.push_str(&chunk);
+                    if buffer.len() >= 256 || last_flush.elapsed() >= Duration::from_secs(2) {
+                        let snippet = crate::cron::isolated_agent::truncate_utf8(&buffer, 512);
+                        if !snippet.is_empty() {
+                            let _ = progress_manager
+                                .broadcast_to_parent(
+                                    &progress_session_id,
+                                    format!("[Subagent {}] Progress: {}", progress_session_id, snippet),
+                                )
+                                .await;
+                        }
+                        buffer.clear();
+                        last_flush = Instant::now();
+                    }
+                }
+
+                if !buffer.is_empty() {
+                    let snippet = crate::cron::isolated_agent::truncate_utf8(&buffer, 512);
+                    let _ = progress_manager
+                        .broadcast_to_parent(
+                            &progress_session_id,
+                            format!("[Subagent {}] Progress: {}", progress_session_id, snippet),
+                        )
+                        .await;
+                }
+            });
+
+            let exec_progress_tx = progress_tx.clone();
+            let result = crate::cron::isolated_agent::execute_agent_message(
+                &session.id,
+                &task.task,
+                session.model.clone(),
+                Some(exec_progress_tx),
+            )
+            .await;
+
+            drop(progress_tx);
+            let _ = progress_handle.await;
+
+            match result {
+                Ok(output) => {
+                    let summary = crate::cron::isolated_agent::truncate_utf8(&output, 2000);
+                    let _ = manager
+                        .update_task_status(&task.id, TaskStatus::Completed, Some(output))
+                        .await;
+                    let _ = manager
+                        .broadcast_to_parent(
+                            &session.id,
+                            format!("[Subagent {}] Completed\n{}", session.id, summary),
+                        )
+                        .await;
+                }
+                Err(e) => {
+                    let _ = manager
+                        .update_task_status(&task.id, TaskStatus::Failed, Some(e.to_string()))
+                        .await;
+                    let _ = manager
+                        .broadcast_to_parent(
+                            &session.id,
+                            format!("[Subagent {}] Failed: {}", session.id, e),
+                        )
+                        .await;
+                }
+            }
+        });
     }
 
     /// List all active sessions
@@ -258,6 +406,25 @@ impl AgentManager {
         tasks.values().find(|t| t.session_id == session_id).cloned()
     }
 
+    pub async fn wait_for_task(&self, session_id: &str, timeout: Duration) -> Result<SessionTask> {
+        let start = Instant::now();
+        loop {
+            if start.elapsed() > timeout {
+                return Err(anyhow::anyhow!("Timeout waiting for session {}", session_id));
+            }
+
+            if let Some(task) = self.get_task_by_session(session_id).await {
+                if matches!(task.status, TaskStatus::Completed | TaskStatus::Failed) {
+                    return Ok(task);
+                }
+            } else {
+                return Err(anyhow::anyhow!("No task found for session {}", session_id));
+            }
+
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
     /// Get all tasks for a session
     pub async fn get_session_tasks(&self, session_id: &str) -> Vec<SessionTask> {
         let tasks = self.tasks.lock().await;
@@ -266,6 +433,24 @@ impl AgentManager {
             .filter(|t| t.session_id == session_id)
             .cloned()
             .collect()
+    }
+
+    pub async fn recover_sessions(&self) -> Result<usize> {
+        let sessions = self.sessions.lock().await.clone();
+        let tasks = self.tasks.lock().await.clone();
+
+        let mut recovered = 0;
+
+        for task in tasks.values() {
+            if matches!(task.status, TaskStatus::Running) {
+                if let Some(session) = sessions.get(&task.session_id) {
+                    self.spawn_task_execution(session.clone(), task.clone());
+                    recovered += 1;
+                }
+            }
+        }
+
+        Ok(recovered)
     }
 
     /// Cleanup completed isolated sessions based on policy

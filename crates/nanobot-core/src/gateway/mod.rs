@@ -25,8 +25,39 @@ use serde_json::json;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation};
+use chrono::{Duration, Utc};
 
 use crate::agent::{AgentMessage, StreamChunk};
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct GatewayClaims {
+    sid: String,
+    exp: usize,
+}
+
+fn encode_session_token(secret: &[u8], session_id: &str) -> String {
+    let exp = (Utc::now() + Duration::hours(24)).timestamp() as usize;
+    jsonwebtoken::encode(
+        &Header::default(),
+        &GatewayClaims {
+            sid: session_id.to_string(),
+            exp,
+        },
+        &EncodingKey::from_secret(secret),
+    )
+    .unwrap_or_default()
+}
+
+fn validate_session_token(secret: &[u8], token: &str, session_id: &str) -> bool {
+    let claims = jsonwebtoken::decode::<GatewayClaims>(
+        token,
+        &DecodingKey::from_secret(secret),
+        &Validation::default(),
+    );
+
+    matches!(claims, Ok(decoded) if decoded.claims.sid == session_id)
+}
 
 #[derive(Clone)]
 pub struct GatewayConfig {
@@ -37,14 +68,23 @@ pub struct GatewayConfig {
 pub struct Gateway {
     config: GatewayConfig,
     agent_tx: mpsc::Sender<AgentMessage>,
+    confirmation_service: std::sync::Arc<tokio::sync::Mutex<crate::tools::ConfirmationService>>,
 }
 
 impl Gateway {
-    pub fn new(config: GatewayConfig, agent_tx: mpsc::Sender<AgentMessage>) -> Self {
-        Self { config, agent_tx }
+    pub fn new(
+        config: GatewayConfig,
+        agent_tx: mpsc::Sender<AgentMessage>,
+        confirmation_service: std::sync::Arc<tokio::sync::Mutex<crate::tools::ConfirmationService>>,
+    ) -> Self {
+        Self {
+            config,
+            agent_tx,
+            confirmation_service,
+        }
     }
 
-    pub async fn start(&self) -> Result<()> {
+pub async fn start(&self) -> Result<()> {
         let app = Router::new()
             .route("/health", get(health_check))
             .route("/ws", get(ws_handler))
@@ -57,6 +97,20 @@ impl Gateway {
         axum::serve(listener, app).await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_session_token_roundtrip() {
+        let secret = b"test-secret";
+        let session_id = "session-1";
+        let token = encode_session_token(secret, session_id);
+        assert!(validate_session_token(secret, &token, session_id));
+        assert!(!validate_session_token(secret, &token, "other"));
     }
 }
 
@@ -73,39 +127,27 @@ async fn ws_handler(
 }
 
 async fn handle_socket(socket: WebSocket, gateway: Arc<Gateway>) {
-    let (mut ws_tx, mut ws_rx) = socket.split();
+    let (ws_tx, mut ws_rx) = socket.split();
+    let ws_tx = std::sync::Arc::new(tokio::sync::Mutex::new(ws_tx));
     
-    // Wait for initial message - check if client provides session_id
-    let session_id = if let Some(Ok(WsMessage::Text(first_msg))) = ws_rx.next().await {
-        if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&first_msg) {
-            // Check for init message with session_id
-            if json_val["type"] == "init" {
-                if let Some(provided_id) = json_val["session_id"].as_str() {
-                    // Client resuming session
-                    let session = provided_id.to_string();
-                    tracing::info!("Resuming session: {}", session);
-                    session
-                } else {
-                    // New session requested
-                    let new_id = uuid::Uuid::new_v4().to_string();
-                    tracing::info!("New session: {}", new_id);
-                    
-                    // Send session_id back to client
-                    let response = json!({"type": "session_init", "session_id": new_id});
-                    let _ = ws_tx.send(WsMessage::Text(response.to_string())).await;
-                    
-                    new_id
-                }
-            } else {
-                // First message is not init, generate new session
-                uuid::Uuid::new_v4().to_string()
-            }
-        } else {
-            uuid::Uuid::new_v4().to_string()
-        }
-    } else {
-        uuid::Uuid::new_v4().to_string()
-    };
+    // Wait for initial message (optional), but always generate a server-side session_id
+    let _ = ws_rx.next().await;
+    let session_id = uuid::Uuid::new_v4().to_string();
+    tracing::info!("New session: {}", session_id);
+
+    let secret = std::env::var("NANOBOT_GATEWAY_SESSION_SECRET")
+        .map(|s| s.into_bytes())
+        .unwrap_or_else(|_| {
+            let secrets = crate::security::get_or_create_session_secrets()
+                .map(|s| s.gateway_session_secret)
+                .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
+            secrets.into_bytes()
+        });
+    let token = encode_session_token(&secret, &session_id);
+
+    // Send session_id back to client
+    let response = json!({"type": "session_init", "session_id": session_id, "token": token});
+    let _ = ws_tx.lock().await.send(WsMessage::Text(response.to_string())).await;
     
     let span = tracing::info_span!("websocket_session", session_id = %session_id);
     let _enter = span.enter();
@@ -114,28 +156,55 @@ async fn handle_socket(socket: WebSocket, gateway: Arc<Gateway>) {
     tracing::info!("WebSocket session established");
     
 
+    let (confirm_req_tx, mut confirm_req_rx) = mpsc::channel::<crate::tools::gateway_confirmation::GatewayConfirmationEvent>(10);
+    let (confirm_resp_tx, confirm_resp_rx) = mpsc::channel::<crate::tools::gateway_confirmation::GatewayConfirmationEvent>(10);
+    let confirm_channel = format!("web:{}", session_id);
+
+    {
+        let mut service = gateway.confirmation_service.lock().await;
+        service.register_adapter(Box::new(crate::tools::gateway_confirmation::GatewayConfirmationAdapter::new(
+            confirm_req_tx,
+            confirm_resp_rx,
+            confirm_channel,
+        )));
+    }
+
     // Create channel for agent responses
     let (response_tx, mut response_rx) = mpsc::channel(100);
 
     // Spawn task to forward agent responses to WebSocket
+    let ws_tx_clone = ws_tx.clone();
     let send_task = tokio::spawn(async move {
-        while let Some(chunk) = response_rx.recv().await {
-            match chunk {
-                StreamChunk::TextDelta(text) => {
-                    let msg = json!({
-                        "type": "text_delta",
-                        "delta": text
-                    });
-                    if let Err(e) = ws_tx.send(WsMessage::Text(msg.to_string())).await {
-                        eprintln!("WS send error: {}", e);
-                        break;
+        loop {
+            tokio::select! {
+                Some(chunk) = response_rx.recv() => {
+                    match chunk {
+                        StreamChunk::TextDelta(text) => {
+                            let msg = json!({
+                                "type": "text_delta",
+                                "delta": text
+                            });
+                            if let Err(e) = ws_tx_clone.lock().await.send(WsMessage::Text(msg.to_string())).await {
+                                eprintln!("WS send error: {}", e);
+                                break;
+                            }
+                        }
+                        StreamChunk::Done => {
+                            let msg = json!({ "type": "done" });
+                            let _ = ws_tx_clone.lock().await.send(WsMessage::Text(msg.to_string())).await;
+                        }
+                        _ => {}
                     }
                 }
-                StreamChunk::Done => {
-                    let msg = json!({ "type": "done" });
-                    let _ = ws_tx.send(WsMessage::Text(msg.to_string())).await;
+                Some(event) = confirm_req_rx.recv() => {
+                    if let Ok(text) = serde_json::to_string(&event) {
+                        if let Err(e) = ws_tx_clone.lock().await.send(WsMessage::Text(text)).await {
+                            eprintln!("WS send error: {}", e);
+                            break;
+                        }
+                    }
                 }
-                _ => {} // Ignore others for now
+                else => break,
             }
         }
     });
@@ -150,17 +219,51 @@ async fn handle_socket(socket: WebSocket, gateway: Arc<Gateway>) {
                     // Let's assume raw text for "chat" for now, or JSON object.
                     // Basic protocol: {"message": "hello"}
 
-                    let content = if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text)
-                    {
+                    let parsed_json = serde_json::from_str::<serde_json::Value>(&text).ok();
+
+                    if let Some(json) = parsed_json.as_ref() {
+                        if json["type"] == "refresh_token" {
+                            let new_token = encode_session_token(&secret, &session_id);
+                            let msg = json!({"type": "session_refresh", "token": new_token});
+                            let _ = ws_tx.lock().await.send(WsMessage::Text(msg.to_string())).await;
+                            continue;
+                        }
+
+                        let token = json["token"].as_str().unwrap_or("");
+                        if !validate_session_token(&secret, token, &session_id) {
+                            let msg = json!({"type": "error", "error": "invalid_token", "action": "refresh_token"});
+                            let _ = ws_tx.lock().await.send(WsMessage::Text(msg.to_string())).await;
+                            continue;
+                        }
+
+                        if json["type"] == "confirmation_response" {
+                            let id = json["id"].as_str().unwrap_or("").to_string();
+                            let allowed = json["allowed"].as_bool().unwrap_or(false);
+                            if !id.is_empty() {
+                                let _ = confirm_resp_tx
+                                    .send(crate::tools::gateway_confirmation::GatewayConfirmationEvent::Response {
+                                        id,
+                                        allowed,
+                                        remember: false,
+                                    })
+                                    .await;
+                                continue;
+                            }
+                        }
+                    }
+
+                    let content = if let Some(json) = parsed_json {
                         json["message"].as_str().unwrap_or("").to_string()
                     } else {
-                        text // Fallback
+                        let msg = json!({"type": "error", "error": "invalid_payload"});
+                        let _ = ws_tx.lock().await.send(WsMessage::Text(msg.to_string())).await;
+                        continue;
                     };
 
                     if !content.is_empty() {
                         let msg = AgentMessage {
                             session_id: session_id.clone(),
-                            tenant_id: "default".to_string(), // Gateway/WebSocket implies default tenant for now
+                            tenant_id: format!("web:{}", session_id),
                             content,
                             response_tx: response_tx.clone(),
                         };

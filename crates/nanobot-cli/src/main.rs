@@ -15,6 +15,9 @@ use nanobot_core::{
 
 // Alias the moved telegram module to maintain compatibility
 use nanobot_core::gateway::telegram_adapter as telegram;
+use nanobot_core::gateway::slack_adapter as slack;
+use nanobot_core::gateway::discord_adapter as discord;
+use tokio::io::AsyncBufReadExt;
 
 // Local modules
 // removed mod service;
@@ -76,8 +79,12 @@ enum Commands {
     },
     /// Debug Sandbox Connectivity
     DebugSandbox,
-    /// Run Telegram bot gateway
-    Gateway,
+    /// Run messaging gateway(s)
+    Gateway {
+        /// Channel: telegram | slack | discord | all
+        #[arg(long)]
+        channel: Option<String>,
+    },
     /// Manage pairing requests for secure channel access
     Pairing {
         #[command(subcommand)]
@@ -119,6 +126,11 @@ enum Commands {
         /// Port to listen on (default: 3000)
         #[arg(short, long, default_value = "3000")]
         port: u16,
+    },
+    /// Manage admin token
+    AdminToken {
+        #[command(subcommand)]
+        action: AdminTokenAction,
     },
     /// Connect to admin API console (REPL)
     Console {
@@ -321,6 +333,7 @@ async fn main() -> Result<()> {
                 }
                 
                 // Chain service installation if requested
+                let mut service_started = false;
                 if result.should_install_service {
                     println!();
                     println!("{}", console::style("Installing system service...").bold().cyan());
@@ -328,7 +341,13 @@ async fn main() -> Result<()> {
                         println!("{}", console::style(format!("⚠️  Service installation failed: {}", e)).yellow());
                         println!("You can install it later with: nanobot service install");
                     } else {
-                        println!("{}", console::style("✅ Service installed!").green().bold());
+                        println!("{}", console::style("✅ Service installed! Starting...").green().bold());
+                        if let Err(e) = nanobot_core::service::ServiceManager::new().start() {
+                            println!("{}", console::style(format!("⚠️  Service start failed: {}", e)).yellow());
+                        } else {
+                            println!("{}", console::style("✅ Service started (24x7)").green().bold());
+                            service_started = true;
+                        }
                     }
                 }
                 
@@ -338,7 +357,7 @@ async fn main() -> Result<()> {
                     println!("{}", console::style("🚀 Hatching into TUI...").bold().cyan());
                     println!();
                     run_rich_tui_chat(None).await?;
-                } else if result.should_start_gateway {
+                } else if result.should_start_gateway && !service_started {
                     // Launch gateway instead of TUI
                     println!();
                     println!("{}", console::style("🚀 Starting Gateway...").bold().cyan());
@@ -347,7 +366,34 @@ async fn main() -> Result<()> {
                     println!();
                     
                     // Run gateway (this is a blocking call)
-                    run_telegram_gateway().await?;
+                    run_gateway(None).await?;
+                } else if result.should_start_gateway && service_started {
+                    println!("{}", console::style("Gateway is running as a service.").green());
+                }
+
+                if result.should_start_server && !service_started {
+                    println!();
+                    println!("{}", console::style("🚀 Starting WebSocket API...").bold().cyan());
+                    println!("Press Ctrl+C to stop.");
+                    println!();
+
+                    let config = nanobot_core::gateway::GatewayConfig { port: result.server_port };
+                    let agent_loop = nanobot_core::agent::AgentLoop::new().await?;
+                    let confirmation_service = agent_loop.confirmation_service();
+                    let (agent_tx, agent_rx) = tokio::sync::mpsc::channel(100);
+                    tokio::spawn(async move { agent_loop.run(agent_rx).await; });
+                    let gateway = nanobot_core::gateway::Gateway::new(config, agent_tx, confirmation_service);
+                    gateway.start().await?;
+                } else if result.should_start_server && service_started {
+                    println!("{}", console::style("WebSocket API is handled by the service.").green());
+                }
+
+                if result.should_start_webchat {
+                    println!();
+                    println!("{}", console::style("🚀 Starting Web Chat...").bold().cyan());
+                    println!("Press Ctrl+C to stop.");
+                    println!();
+                    crate::web::run_server(result.web_port).await?;
                 }
             } else {
                 // ... basic setup
@@ -390,7 +436,7 @@ async fn main() -> Result<()> {
         Commands::DebugSandbox => {
             run_debug_sandbox().await?;
         }
-        Commands::Gateway => {
+        Commands::Gateway { channel } => {
             // Initialize file-based logging
             if let Err(e) = nanobot_core::logging::init_file_logging() {
                 eprintln!("⚠️  Failed to initialize logging: {}", e);
@@ -427,9 +473,9 @@ async fn main() -> Result<()> {
             tracing::info!("Health check available at http://localhost:{}/health", health_port);
             tracing::info!("Press Ctrl+C to shutdown gracefully");
             
-            // Run the Telegram gateway with shutdown check
+            // Run the gateway(s) with shutdown check
             let gateway_handle = tokio::spawn(async move {
-                if let Err(e) = run_telegram_gateway().await {
+                if let Err(e) = run_gateway(channel).await {
                     tracing::error!("Gateway error: {:?}", e);
                 }
             });
@@ -613,21 +659,17 @@ async fn main() -> Result<()> {
             // Channel for Gateway -> Agent communication
             let (agent_tx, agent_rx) = mpsc::channel(100);
 
+            let agent_loop = AgentLoop::new().await?;
+            let confirmation_service = agent_loop.confirmation_service();
+
             // Spawn Agent Loop
             tokio::spawn(async move {
                 println!("🤖 Starting Agent Loop...");
-                match AgentLoop::new().await {
-                   Ok(agent) => {
-                       agent.run(agent_rx).await;
-                   }
-                   Err(e) => {
-                       eprintln!("🔥 Failed to start Agent Loop: {}", e);
-                   }
-                }
+                agent_loop.run(agent_rx).await;
             });
 
             let config = gateway::GatewayConfig { port: port };
-            let gateway = gateway::Gateway::new(config, agent_tx);
+            let gateway = gateway::Gateway::new(config, agent_tx, confirmation_service);
             gateway.start().await?;
         }
         Commands::Security { action } => {
@@ -749,21 +791,53 @@ async fn main() -> Result<()> {
         }
         Commands::Run { agent } => {
             use nanobot_core::config::agent_loader::AgentLoader;
-            
+             
             println!("🚀 Loading agent from manifest: {}", agent.display());
-            
+             
             let manifest = AgentLoader::load(&agent)?;
             AgentLoader::validate(&manifest)?;
-            
+             
             println!("✅ Manifest valid!");
             AgentLoader::info(&manifest);
-            
-            println!("\n⚠️  Full agent runtime not yet implemented.");
-            println!("   Coming soon: Channel setup, tool registration, and agent execution.");
+
+            run_manifest_agent(agent, manifest).await?;
         }
         Commands::Admin { port } => {
             println!("🔧 Starting Admin API server on port {}...", port);
             nanobot_core::server::start_admin_server(port).await?;
+        }
+        Commands::AdminToken { action } => {
+            match action {
+                AdminTokenAction::Set { token } => {
+                    let value = match token {
+                        Some(token) => token,
+                        None => rpassword::prompt_password("Enter admin token: ")?,
+                    };
+                    nanobot_core::security::write_admin_token(value.trim())?;
+                    println!("✅ Admin token saved");
+                }
+                AdminTokenAction::Show { reveal } => {
+                    let token = nanobot_core::security::read_admin_token()?;
+                    if let Some(token) = token {
+                        if reveal {
+                            println!("Admin token: {}", token);
+                        } else {
+                            let masked = if token.len() > 6 {
+                                format!("{}...{}", &token[..3], &token[token.len() - 3..])
+                            } else {
+                                "***".to_string()
+                            };
+                            println!("Admin token set ({})", masked);
+                        }
+                    } else {
+                        println!("Admin token not set");
+                    }
+                }
+                AdminTokenAction::Clear => {
+                    nanobot_core::security::clear_admin_token()?;
+                    println!("✅ Admin token cleared");
+                }
+            }
         }
         Commands::Console { port } => {
             use nanobot_core::console::ConsoleREPL;
@@ -1358,37 +1432,153 @@ async fn run_debug_sandbox() -> Result<()> {
     Ok(())
 }
 
-async fn run_telegram_gateway() -> Result<()> {
-    println!("🤖 Starting Telegram Bot Gateway...\n");
+async fn run_gateway(channel: Option<String>) -> Result<()> {
+    let channel = channel.unwrap_or_else(|| "all".to_string()).to_lowercase();
 
-    // Get Telegram token from Config or Environment
+    println!("🤖 Starting Gateway ({})...\n", channel);
+
+    let (agent_tx, registry, confirmation_service) = init_gateway_context().await?;
+
+    let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+    let mut started = 0usize;
+
+    if channel == "telegram" || channel == "all" {
+        if let Some(config) = load_telegram_config()? {
+            let bot = telegram::TelegramBot::new(
+                config,
+                agent_tx.clone(),
+                registry.clone(),
+                confirmation_service.clone(),
+            );
+            handles.push(tokio::spawn(async move {
+                if let Err(e) = bot.run().await {
+                    eprintln!("❌ Telegram bot error: {}", e);
+                }
+            }));
+            started += 1;
+        } else if channel == "telegram" {
+            return Err(anyhow::anyhow!("Telegram bot token not configured"));
+        }
+    }
+
+    if channel == "slack" || channel == "all" {
+        if let Some(config) = load_slack_config()? {
+            let bot = slack::SlackBot::new(
+                config,
+                agent_tx.clone(),
+                registry.clone(),
+                confirmation_service.clone(),
+            );
+            handles.push(tokio::spawn(async move {
+                if let Err(e) = bot.run().await {
+                    eprintln!("❌ Slack bot error: {}", e);
+                }
+            }));
+            started += 1;
+        } else if channel == "slack" {
+            return Err(anyhow::anyhow!("Slack tokens not configured"));
+        }
+    }
+
+    if channel == "discord" || channel == "all" {
+        if let Some(config) = load_discord_config()? {
+            let bot = discord::DiscordBot::new(
+                config,
+                agent_tx.clone(),
+                registry.clone(),
+                confirmation_service.clone(),
+            );
+            handles.push(tokio::spawn(async move {
+                if let Err(e) = bot.run().await {
+                    eprintln!("❌ Discord bot error: {}", e);
+                }
+            }));
+            started += 1;
+        } else if channel == "discord" {
+            return Err(anyhow::anyhow!("Discord token not configured"));
+        }
+    }
+
+    if started == 0 {
+        return Err(anyhow::anyhow!("No gateways configured to start"));
+    }
+
+    println!("✅ Gateway started with {} channel(s)", started);
+    println!("Press Ctrl+C to stop.\n");
+
+    tokio::signal::ctrl_c().await?;
+    println!("🛑 Shutting down...");
+
+    for handle in handles {
+        handle.abort();
+    }
+
+    Ok(())
+}
+
+#[derive(Subcommand, Debug)]
+enum AdminTokenAction {
+    /// Set admin token (stored on disk)
+    Set {
+        /// Token value (omit to be prompted)
+        #[arg(long)]
+        token: Option<String>,
+    },
+    /// Show admin token status
+    Show {
+        /// Reveal full token
+        #[arg(long)]
+        reveal: bool,
+    },
+    /// Clear admin token
+    Clear,
+}
+
+async fn init_gateway_context(
+) -> Result<(
+    tokio::sync::mpsc::Sender<nanobot_core::agent::AgentMessage>,
+    std::sync::Arc<nanobot_core::gateway::registry::ChannelRegistry>,
+    std::sync::Arc<tokio::sync::Mutex<nanobot_core::tools::ConfirmationService>>,
+)> {
+    println!("🧠 Initializing AgentLoop with full features...");
+    let agent_loop = nanobot_core::agent::AgentLoop::new().await?;
+    let confirmation_service = agent_loop.confirmation_service();
+
+    let (agent_tx, agent_rx) = tokio::sync::mpsc::channel(100);
+    let registry = std::sync::Arc::new(nanobot_core::gateway::registry::ChannelRegistry::new());
+
+    tokio::spawn(async move {
+        agent_loop.run(agent_rx).await;
+    });
+
+    Ok((agent_tx, registry, confirmation_service))
+}
+
+fn load_telegram_config() -> Result<Option<telegram::TelegramConfig>> {
     let config = nanobot_core::config::Config::load().ok();
-    
+    let dm_scope = config
+        .as_ref()
+        .map(|c| c.session.dm_scope)
+        .unwrap_or_default();
+
     let telegram_token = if let Some(ref c) = config {
         if let Some(ref tg) = c.providers.telegram {
-             tg.bot_token.clone()
+            tg.bot_token.clone()
         } else {
-             // Fallback to env
-             std::env::var("TELEGRAM_BOT_TOKEN")
+            std::env::var("TELEGRAM_BOT_TOKEN")
                 .or_else(|_| std::env::var("NANOBOT_TELEGRAM_TOKEN"))
                 .unwrap_or_default()
         }
     } else {
-         std::env::var("TELEGRAM_BOT_TOKEN")
+        std::env::var("TELEGRAM_BOT_TOKEN")
             .or_else(|_| std::env::var("NANOBOT_TELEGRAM_TOKEN"))
             .unwrap_or_default()
     };
 
     if telegram_token.is_empty() {
-        return Err(anyhow::anyhow!(
-            "Telegram bot token not found.\n\
-             Run 'nanobot setup --telegram' to configure it interactively.\n\
-             Or set env var: export TELEGRAM_BOT_TOKEN=your_token_here"
-        ));
+        return Ok(None);
     }
 
-    // Get allowed users (Legacy Env Support - pairing system relies on DB)
-    // We pass None to config if not set in env, let pairing system handle it
     let allowed_users: Option<Vec<i64>> = std::env::var("TELEGRAM_ALLOWED_USERS")
         .ok()
         .map(|s| {
@@ -1397,48 +1587,247 @@ async fn run_telegram_gateway() -> Result<()> {
                 .collect()
         });
 
-    if let Some(ref users) = allowed_users {
-        println!("📋 Allowed users (Legacy): {:?}", users);
-    } 
-
-    let telegram_config = telegram::TelegramConfig {
+    Ok(Some(telegram::TelegramConfig {
         token: telegram_token,
         allowed_users,
-    };
+        dm_scope,
+    }))
+}
 
-    // Initialize AgentLoop (now Telegram gets RAG + Cron + Personality!)
-    println!("🧠 Initializing AgentLoop with full features...");
-    let agent_loop = nanobot_core::agent::AgentLoop::new().await?;
-    
-    // Create channel for AgentMessages
-    let (agent_tx, agent_rx) = tokio::sync::mpsc::channel(100);
+fn load_slack_config() -> Result<Option<slack::SlackConfig>> {
+    let config = nanobot_core::config::Config::load().ok();
+    let dm_scope = config
+        .as_ref()
+        .map(|c| c.session.dm_scope)
+        .unwrap_or_default();
+    let bot_token = std::env::var("SLACK_BOT_TOKEN").unwrap_or_default();
+    let app_token = std::env::var("SLACK_APP_TOKEN").ok();
 
-    // Initialize Gateway Registry
-    let registry = std::sync::Arc::new(nanobot_core::gateway::registry::ChannelRegistry::new());
+    if bot_token.is_empty() {
+        return Ok(None);
+    }
 
-    // Spawn AgentLoop
-    tokio::spawn(async move {
-        println!("🤖 AgentLoop started for Telegram");
-        agent_loop.run(agent_rx).await;
-    });
+    Ok(Some(slack::SlackConfig {
+        bot_token,
+        app_token,
+        dm_scope,
+    }))
+}
 
-    // Create Telegram bot (now sends to AgentLoop AND listens to Registry)
-    let bot = telegram::TelegramBot::new(telegram_config, agent_tx, registry.clone());
+fn load_discord_config() -> Result<Option<discord::DiscordConfig>> {
+    let config = nanobot_core::config::Config::load().ok();
+    let dm_scope = config
+        .as_ref()
+        .map(|c| c.session.dm_scope)
+        .unwrap_or_default();
+    let token = std::env::var("DISCORD_TOKEN").unwrap_or_default();
+    let app_id = std::env::var("DISCORD_APP_ID").unwrap_or_default();
 
-    println!("✅ Telegram bot started with AgentLoop + Actor Registry!");
-    println!("📱 Features enabled: RAG, Cron, Personality, Tool Loop, Bidirectional Messaging\n");
+    if token.is_empty() || app_id.is_empty() {
+        return Ok(None);
+    }
 
-    // Run bot (Dual-task architecture for robust Actor behavior)
-    tokio::select! {
-        result = bot.run() => {
-            if let Err(e) = result {
-                eprintln!("❌ Telegram bot error: {}", e);
+    let application_id = app_id
+        .parse::<u64>()
+        .map_err(|_| anyhow::anyhow!("DISCORD_APP_ID must be a numeric application ID"))?;
+
+    Ok(Some(discord::DiscordConfig {
+        token,
+        application_id,
+        dm_scope,
+    }))
+}
+
+async fn run_manifest_agent(
+    manifest_path: PathBuf,
+    manifest: nanobot_core::config::AgentManifest,
+) -> Result<()> {
+    let mut agent_loop = nanobot_core::agent::AgentLoop::new().await?;
+
+    let system_prompt = build_manifest_prompt(&manifest);
+    agent_loop.set_system_prompt_override(Some(system_prompt));
+
+    let policy = build_manifest_tool_policy(&manifest.tools);
+    agent_loop.set_tool_policy(policy);
+
+    if let Some(script) = manifest.script.as_ref() {
+        if script.enabled {
+            let script_path = resolve_manifest_path(&manifest_path, &script.source);
+            let source = std::fs::read_to_string(&script_path)
+                .map_err(|e| anyhow::anyhow!("Failed to read script {}: {}", script_path.display(), e))?;
+            let _engine = nanobot_core::script::ScriptEngine::new(&source)
+                .map_err(|e| anyhow::anyhow!("Script init failed: {}", e))?;
+        }
+    }
+
+    let (agent_tx, registry, confirmation_service) = init_agent_context(agent_loop).await?;
+
+    let mut terminal_enabled = false;
+    let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+
+    for channel in &manifest.channels {
+        match channel {
+            nanobot_core::config::agent_manifest::ChannelConfig::Terminal => {
+                terminal_enabled = true;
+            }
+            nanobot_core::config::agent_manifest::ChannelConfig::Telegram { token_env } => {
+                let token = std::env::var(token_env).map_err(|_| {
+                    anyhow::anyhow!("Missing Telegram token env var: {}", token_env)
+                })?;
+                let config = telegram::TelegramConfig {
+                    token,
+                    allowed_users: None,
+                };
+                let bot = telegram::TelegramBot::new(
+                    config,
+                    agent_tx.clone(),
+                    registry.clone(),
+                    confirmation_service.clone(),
+                );
+                handles.push(tokio::spawn(async move {
+                    if let Err(e) = bot.run().await {
+                        eprintln!("❌ Telegram bot error: {}", e);
+                    }
+                }));
+            }
+            nanobot_core::config::agent_manifest::ChannelConfig::Plugin { path, .. } => {
+                return Err(anyhow::anyhow!(
+                    "Plugin channel '{}' not supported yet in manifest runner",
+                    path
+                ));
             }
         }
-        _ = tokio::signal::ctrl_c() => {
-            println!("🛑 Shutting down...");
+    }
+
+    if manifest.channels.is_empty() {
+        terminal_enabled = true;
+    }
+
+    if terminal_enabled {
+        run_terminal_manifest(agent_tx).await?;
+    } else {
+        println!("Gateway channels active. Press Ctrl+C to stop.");
+        tokio::signal::ctrl_c().await?;
+    }
+
+    for handle in handles {
+        handle.abort();
+    }
+
+    Ok(())
+}
+
+async fn run_terminal_manifest(
+    agent_tx: tokio::sync::mpsc::Sender<nanobot_core::agent::AgentMessage>,
+) -> Result<()> {
+    println!("\n🧠 Terminal agent ready. Type 'exit' to quit.\n");
+    let session_id = format!("terminal:{}", uuid::Uuid::new_v4());
+
+    let stdin = tokio::io::BufReader::new(tokio::io::stdin());
+    let mut lines = stdin.lines();
+
+    while let Some(line) = lines.next_line().await? {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.eq_ignore_ascii_case("exit") {
+            break;
+        }
+
+        let (response_tx, mut response_rx) = tokio::sync::mpsc::channel(100);
+        let msg = nanobot_core::agent::AgentMessage {
+            session_id: session_id.clone(),
+            tenant_id: session_id.clone(),
+            content: trimmed.to_string(),
+            response_tx,
+        };
+
+        agent_tx.send(msg).await?;
+
+        while let Some(chunk) = response_rx.recv().await {
+            match chunk {
+                nanobot_core::agent::StreamChunk::Thinking(text) => {
+                    print!("{}", text);
+                    std::io::Write::flush(&mut std::io::stdout())?;
+                }
+                nanobot_core::agent::StreamChunk::TextDelta(text) => {
+                    print!("{}", text);
+                    std::io::Write::flush(&mut std::io::stdout())?;
+                }
+                nanobot_core::agent::StreamChunk::ToolCall(call) => {
+                    eprintln!("\n🔧 Tool: {}", call);
+                }
+                nanobot_core::agent::StreamChunk::ToolResult(result) => {
+                    eprintln!("\n✓ Result: {}", result.chars().take(200).collect::<String>());
+                }
+                nanobot_core::agent::StreamChunk::Done => {
+                    println!("\n");
+                    break;
+                }
+            }
         }
     }
 
     Ok(())
+}
+
+async fn init_agent_context(
+    agent_loop: nanobot_core::agent::AgentLoop,
+) -> Result<(
+    tokio::sync::mpsc::Sender<nanobot_core::agent::AgentMessage>,
+    std::sync::Arc<nanobot_core::gateway::registry::ChannelRegistry>,
+    std::sync::Arc<tokio::sync::Mutex<nanobot_core::tools::ConfirmationService>>,
+)> {
+    let confirmation_service = agent_loop.confirmation_service();
+
+    let (agent_tx, agent_rx) = tokio::sync::mpsc::channel(100);
+    let registry = std::sync::Arc::new(nanobot_core::gateway::registry::ChannelRegistry::new());
+
+    tokio::spawn(async move {
+        agent_loop.run(agent_rx).await;
+    });
+
+    Ok((agent_tx, registry, confirmation_service))
+}
+
+fn build_manifest_prompt(manifest: &nanobot_core::config::AgentManifest) -> String {
+    format!(
+        "{}\n\nAgent Name: {}\nRole: {}",
+        manifest.identity.system_prompt,
+        manifest.identity.name,
+        manifest.identity.role
+    )
+}
+
+fn build_manifest_tool_policy(
+    tools: &nanobot_core::config::agent_manifest::ToolsConfig,
+) -> nanobot_core::tools::ToolPolicy {
+    let mut policy = if tools.allow.is_empty() {
+        nanobot_core::tools::ToolPolicy::permissive()
+    } else {
+        nanobot_core::tools::ToolPolicy::restrictive()
+    };
+
+    for tool in &tools.allow {
+        policy = policy.allow_tool(tool.clone());
+    }
+
+    for tool in &tools.deny {
+        policy = policy.deny_tool(tool.clone());
+    }
+
+    policy
+}
+
+fn resolve_manifest_path(manifest_path: &PathBuf, source: &str) -> PathBuf {
+    let source_path = PathBuf::from(source);
+    if source_path.is_absolute() {
+        source_path
+    } else {
+        manifest_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(source_path)
+    }
 }

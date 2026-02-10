@@ -140,6 +140,24 @@ impl McpManager {
         client.call_tool(tool_name, arguments).await
     }
 
+    pub async fn execute_tool_by_name(
+        &self,
+        tool_name: &str,
+        arguments: serde_json::Value,
+    ) -> Option<Result<ToolCallResult>> {
+        // Find tool in cache
+        let cache = self.tools_cache.read().await;
+        let found = cache.iter().find(|(_, tool)| tool.name == tool_name);
+        
+        if let Some((server_name, _)) = found {
+            let server_name = server_name.clone();
+            drop(cache); // Release lock before awaiting
+            Some(self.call_tool(&server_name, tool_name, arguments).await)
+        } else {
+            None
+        }
+    }
+
     pub async fn server_count(&self) -> usize {
         let clients = self.clients.read().await;
         clients.len()
