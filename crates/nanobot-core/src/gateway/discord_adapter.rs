@@ -32,6 +32,7 @@ pub struct DiscordBot {
     confirmation_service: Arc<tokio::sync::Mutex<crate::tools::ConfirmationService>>,
     confirmation_txs: Arc<tokio::sync::Mutex<std::collections::HashMap<u64, mpsc::Sender<crate::tools::ChannelConfirmationResponse>>>>,
     confirmation_ready: Arc<tokio::sync::Mutex<std::collections::HashSet<u64>>>,
+    pending_questions: Arc<tokio::sync::Mutex<std::collections::HashMap<String, crate::tools::question::QuestionPayload>>>,
     confirmation_outbound_tx: mpsc::Sender<ChannelMessage>,
 }
 
@@ -53,6 +54,7 @@ impl DiscordBot {
             confirmation_service,
             confirmation_txs: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
             confirmation_ready: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
+            pending_questions: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
             confirmation_outbound_tx: {
                 let (tx, _rx) = mpsc::channel(1);
                 tx
@@ -96,7 +98,7 @@ impl DiscordBot {
 
         let user_id = msg.author.id.to_string();
         let channel_id = msg.channel_id;
-        let text = msg.content.clone();
+        let mut text = msg.content.clone();
 
         if text.is_empty() {
             return Ok(());
@@ -160,8 +162,20 @@ impl DiscordBot {
             return Ok(());
         }
 
-        // Forward to AgentLoop
-        let (response_tx, mut response_rx) = mpsc::channel(100);
+        match crate::gateway::onboarding::process_onboarding_message("discord", &user_id, &text).await {
+            Ok(crate::gateway::onboarding::OnboardingOutcome::ReplyOnly(reply)) => {
+                let _ = self.post_message(channel_id, &reply).await;
+                return Ok(());
+            }
+            Ok(crate::gateway::onboarding::OnboardingOutcome::NotNeeded) => {}
+            Err(e) => {
+                let _ = self
+                    .post_message(channel_id, &format!("Setup error: {}", e))
+                    .await;
+                return Ok(());
+            }
+        }
+
         let is_dm = msg.guild_id.is_none();
         let session_id = build_session_id(
             "discord",
@@ -170,9 +184,32 @@ impl DiscordBot {
             self.config.dm_scope,
             is_dm,
         );
+
+        if let Some(pending) = {
+            let pending_map = self.pending_questions.lock().await;
+            pending_map.get(&session_id).cloned()
+        } {
+            match crate::tools::question::normalize_question_answer(&pending, &text) {
+                Ok(normalized) => {
+                    text = normalized;
+                    let mut pending_map = self.pending_questions.lock().await;
+                    pending_map.remove(&session_id);
+                }
+                Err(err_msg) => {
+                    let prompt = crate::tools::question::format_question_prompt(&pending);
+                    let _ = self
+                        .post_message(channel_id, &format!("{}\n{}", err_msg, prompt))
+                        .await;
+                    return Ok(());
+                }
+            }
+        }
+
+        // Forward to AgentLoop
+        let (response_tx, mut response_rx) = mpsc::channel(100);
         let agent_msg = crate::agent::AgentMessage {
             session_id: session_id.clone(),
-            tenant_id: session_id,
+            tenant_id: session_id.clone(),
             content: text,
             response_tx,
         };
@@ -189,7 +226,17 @@ impl DiscordBot {
                 crate::agent::StreamChunk::TextDelta(delta) => {
                     full_response.push_str(&delta);
                 }
-                _ => {} // Ignore other chunks for basic implementation
+                crate::agent::StreamChunk::ToolResult(result) => {
+                    if let Some(payload) = crate::tools::question::parse_question_payload(&result) {
+                        let prompt = crate::tools::question::format_question_prompt(&payload);
+                        {
+                            let mut pending_map = self.pending_questions.lock().await;
+                            pending_map.insert(session_id.clone(), payload);
+                        }
+                        let _ = self.post_message(channel_id, &prompt).await;
+                    }
+                }
+                _ => {}
             }
         }
 

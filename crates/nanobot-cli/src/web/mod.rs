@@ -20,6 +20,7 @@ pub struct WebState {
     pub agent_tx: tokio::sync::mpsc::Sender<AgentMessage>,
     pub auth_secret: Vec<u8>,
     pub session_ids: Arc<Mutex<std::collections::HashMap<String, String>>>,
+    pub pending_questions: Arc<Mutex<std::collections::HashMap<String, nanobot_core::tools::question::QuestionPayload>>>,
 }
 
 impl WebState {
@@ -37,6 +38,7 @@ impl WebState {
             agent_tx,
             auth_secret: secret,
             session_ids: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            pending_questions: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
     }
 }
@@ -286,6 +288,27 @@ async fn chat_handler(
             .clone()
     };
 
+    let mut user_message = req.message.clone();
+    if let Some(pending) = {
+        let pending_map = state.pending_questions.lock().await;
+        pending_map.get(&session_id).cloned()
+    } {
+        match nanobot_core::tools::question::normalize_question_answer(&pending, &user_message) {
+            Ok(normalized) => {
+                user_message = normalized;
+                let mut pending_map = state.pending_questions.lock().await;
+                pending_map.remove(&session_id);
+            }
+            Err(err_msg) => {
+                let prompt = nanobot_core::tools::question::format_question_prompt(&pending);
+                return Ok(Json(ChatResponse {
+                    response: format!("{}\n{}", err_msg, prompt),
+                    session_id,
+                }));
+            }
+        }
+    }
+
     // Create channel for agent responses
     let (response_tx, mut response_rx) = tokio::sync::mpsc::channel::<StreamChunk>(100);
     
@@ -293,7 +316,7 @@ async fn chat_handler(
     let agent_msg = AgentMessage {
         session_id: session_id.clone(),
         tenant_id, // Use validated tenant_id
-        content: req.message.clone(),
+        content: user_message,
         response_tx,
     };
     
@@ -313,7 +336,19 @@ async fn chat_handler(
                 full_response.push_str(&format!("\n[Calling tool: {}]\n", tool_name));
             }
             StreamChunk::ToolResult(result) => {
-                full_response.push_str(&format!("\n[Result: {}]\n", result));
+                if let Some(payload) = nanobot_core::tools::question::parse_question_payload(&result) {
+                    let prompt = nanobot_core::tools::question::format_question_prompt(&payload);
+                    {
+                        let mut pending_map = state.pending_questions.lock().await;
+                        pending_map.insert(session_id.clone(), payload);
+                    }
+                    if !full_response.is_empty() {
+                        full_response.push_str("\n\n");
+                    }
+                    full_response.push_str(&prompt);
+                } else {
+                    full_response.push_str(&format!("\n[Result: {}]\n", result));
+                }
             }
             StreamChunk::Thinking(text) => {
                 // For web simple view, we just append it as a block?

@@ -5,6 +5,7 @@ pub mod templates;
 pub mod wizard;
 pub mod workspace_mgmt;
 pub mod channel_instructions;
+pub mod offline_models;
 
 use anyhow::Result;
 use std::path::PathBuf;
@@ -43,6 +44,8 @@ async fn generate_config(result: &SetupResult) -> Result<()> {
         openai: None,
         openrouter: None,
         telegram: None, // Will be filled if token exists in env or if we want to prompt
+        teams: None,
+        google_chat: None,
         google: None,
     };
 
@@ -60,15 +63,27 @@ async fn generate_config(result: &SetupResult) -> Result<()> {
         }
     }
 
+    if let Some(webhook) = result.teams_webhook.as_ref() {
+        providers.teams = Some(crate::config::TeamsConfig {
+            webhook_url: webhook.clone(),
+        });
+    }
+
+    if let Some(webhook) = result.google_chat_webhook.as_ref() {
+        providers.google_chat = Some(crate::config::GoogleChatConfig {
+            webhook_url: webhook.clone(),
+        });
+    }
+
     // 2. Browser Config
     let browser = if result.enable_browser {
         Some(BrowserConfig {
             headless: true,
             user_data_dir: None,
             proxy: None,
-            use_docker: false,
-            docker_image: "zenika/alpine-chrome:with-puppeteer".to_string(),
-            docker_port: 9222,
+            use_docker: result.browser_use_docker,
+            docker_image: result.browser_docker_image.clone(),
+            docker_port: result.browser_docker_port,
         })
     } else {
         None
@@ -124,4 +139,8 @@ pub async fn basic_setup(opts: SetupOptions) -> Result<()> {
     println!("   Run 'nanobot setup --wizard' for interactive configuration");
 
     Ok(())
+}
+
+pub async fn run_offline_models_installer() -> Result<()> {
+    offline_models::run_offline_models_installer().await
 }

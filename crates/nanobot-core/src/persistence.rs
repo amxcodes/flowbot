@@ -2,7 +2,7 @@ use anyhow::Result;
 use rig::completion::message::{AssistantContent, Text, UserContent};
 use rig::completion::Message;
 use rig::OneOrMany;
-use rusqlite::{params, Connection, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::path::PathBuf;
 
 // Global connection (simplified for single-process use)
@@ -204,5 +204,24 @@ impl PersistenceManager {
         }
 
         Ok(messages)
+    }
+
+    pub fn get_session_stats(&self, session_id: &str) -> Result<(i64, Option<String>)> {
+        let conn = Connection::open(&self.db_path)?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM messages WHERE session_id = ?1",
+            params![session_id],
+            |row| row.get(0),
+        )?;
+
+        let last_created: Option<String> = conn
+            .query_row(
+                "SELECT created_at FROM messages WHERE session_id = ?1 ORDER BY id DESC LIMIT 1",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        Ok((count, last_created))
     }
 }

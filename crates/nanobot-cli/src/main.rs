@@ -17,6 +17,8 @@ use nanobot_core::{
 use nanobot_core::gateway::telegram_adapter as telegram;
 use nanobot_core::gateway::slack_adapter as slack;
 use nanobot_core::gateway::discord_adapter as discord;
+use nanobot_core::gateway::teams_adapter as teams;
+use nanobot_core::gateway::google_chat_adapter as google_chat;
 use tokio::io::AsyncBufReadExt;
 
 // Local modules
@@ -37,6 +39,9 @@ enum Commands {
         /// Run interactive wizard
         #[arg(long)]
         wizard: bool,
+        /// Install offline speech models (Whisper/Sherpa)
+        #[arg(long)]
+        offline_models: bool,
         /// Custom workspace directory
         #[arg(long)]
         workspace: Option<String>,
@@ -50,7 +55,11 @@ enum Commands {
         command: WorkspaceCommands,
     },
     /// Check system health and configuration
-    Doctor,
+    Doctor {
+        /// Run wiring audit (tool description/dispatch/guard parity)
+        #[arg(long)]
+        wiring: bool,
+    },
     /// Start interactive TUI chat
     Chat {
         /// Provider to use (antigravity, openai, openrouter)
@@ -81,7 +90,7 @@ enum Commands {
     DebugSandbox,
     /// Run messaging gateway(s)
     Gateway {
-        /// Channel: telegram | slack | discord | all
+        /// Channel: telegram | slack | discord | teams | google_chat | all
         #[arg(long)]
         channel: Option<String>,
     },
@@ -310,9 +319,14 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     match args.command {
-        Commands::Setup { wizard, workspace, telegram } => {
+        Commands::Setup { wizard, offline_models, workspace, telegram } => {
             if telegram {
                 nanobot_core::setup::telegram::run_telegram_setup_wizard().await?;
+                return Ok(());
+            }
+
+            if offline_models {
+                nanobot_core::setup::run_offline_models_installer().await?;
                 return Ok(());
             }
 
@@ -393,7 +407,12 @@ async fn main() -> Result<()> {
                     println!("{}", console::style("🚀 Starting Web Chat...").bold().cyan());
                     println!("Press Ctrl+C to stop.");
                     println!();
-                    crate::web::run_server(result.web_port).await?;
+                    let agent = nanobot_core::agent::AgentLoop::new().await?;
+                    let (agent_tx, agent_rx) = tokio::sync::mpsc::channel(100);
+                    tokio::spawn(async move {
+                        agent.run(agent_rx).await;
+                    });
+                    crate::web::run_server(result.web_port, agent_tx).await?;
                 }
             } else {
                 // ... basic setup
@@ -418,8 +437,12 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Doctor => {
-            doctor::run_doctor().await?;
+        Commands::Doctor { wiring } => {
+            if wiring {
+                doctor::run_wiring_doctor()?;
+            } else {
+                doctor::run_doctor().await?;
+            }
         }
         Commands::Chat { provider, tui } => {
             if !tui {
@@ -1499,6 +1522,32 @@ async fn run_gateway(channel: Option<String>) -> Result<()> {
         }
     }
 
+    if channel == "teams" || channel == "all" {
+        if let Some(config) = load_teams_config()? {
+            let (inbox_tx, inbox_rx) = tokio::sync::mpsc::channel(100);
+            registry.register("teams", inbox_tx).await;
+            handles.push(tokio::spawn(async move {
+                let _ = teams::run_outbound_loop(config, inbox_rx).await;
+            }));
+            started += 1;
+        } else if channel == "teams" {
+            return Err(anyhow::anyhow!("Teams webhook not configured"));
+        }
+    }
+
+    if channel == "google_chat" || channel == "googlechat" || channel == "all" {
+        if let Some(config) = load_google_chat_config()? {
+            let (inbox_tx, inbox_rx) = tokio::sync::mpsc::channel(100);
+            registry.register("google_chat", inbox_tx).await;
+            handles.push(tokio::spawn(async move {
+                let _ = google_chat::run_outbound_loop(config, inbox_rx).await;
+            }));
+            started += 1;
+        } else if channel == "google_chat" || channel == "googlechat" {
+            return Err(anyhow::anyhow!("Google Chat webhook not configured"));
+        }
+    }
+
     if started == 0 {
         return Err(anyhow::anyhow!("No gateways configured to start"));
     }
@@ -1638,6 +1687,38 @@ fn load_discord_config() -> Result<Option<discord::DiscordConfig>> {
     }))
 }
 
+fn load_teams_config() -> Result<Option<teams::TeamsConfig>> {
+    let config = nanobot_core::config::Config::load().ok();
+    let webhook_url = config
+        .as_ref()
+        .and_then(|c| c.providers.teams.as_ref())
+        .map(|c| c.webhook_url.clone())
+        .or_else(|| std::env::var("TEAMS_WEBHOOK_URL").ok())
+        .unwrap_or_default();
+
+    if webhook_url.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(teams::TeamsConfig { webhook_url }))
+}
+
+fn load_google_chat_config() -> Result<Option<google_chat::GoogleChatConfig>> {
+    let config = nanobot_core::config::Config::load().ok();
+    let webhook_url = config
+        .as_ref()
+        .and_then(|c| c.providers.google_chat.as_ref())
+        .map(|c| c.webhook_url.clone())
+        .or_else(|| std::env::var("GOOGLE_CHAT_WEBHOOK_URL").ok())
+        .unwrap_or_default();
+
+    if webhook_url.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(google_chat::GoogleChatConfig { webhook_url }))
+}
+
 async fn run_manifest_agent(
     manifest_path: PathBuf,
     manifest: nanobot_core::config::AgentManifest,
@@ -1677,6 +1758,7 @@ async fn run_manifest_agent(
                 let config = telegram::TelegramConfig {
                     token,
                     allowed_users: None,
+                    dm_scope: nanobot_core::config::DmScope::PerChannelPeer,
                 };
                 let bot = telegram::TelegramBot::new(
                     config,

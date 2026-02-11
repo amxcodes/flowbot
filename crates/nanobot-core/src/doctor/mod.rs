@@ -3,8 +3,192 @@ use crate::persistence::PersistenceManager;
 use anyhow::Result;
 // We'll add this for nice output, or use direct ANSI codes if keeping deps minimal
 use std::path::PathBuf;
+use std::collections::HashSet;
 
 pub mod telegram; // Add this line
+
+pub fn run_wiring_doctor() -> Result<()> {
+    println!("\n🔧 Running wiring audit...\n");
+
+    let described = extract_described_tools(&crate::tools::executor::get_tool_descriptions());
+    let supported: HashSet<String> = crate::tools::executor::supported_tool_names()
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
+    let guarded: HashSet<String> = crate::tools::guard::ToolGuard::guarded_tool_names()
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    let described_not_supported: Vec<String> = described
+        .difference(&supported)
+        .cloned()
+        .collect();
+    let supported_not_described: Vec<String> = supported
+        .difference(&described)
+        .cloned()
+        .collect();
+    let supported_not_guarded: Vec<String> = supported
+        .difference(&guarded)
+        .cloned()
+        .collect();
+
+    print!("Tool description vs dispatch... ");
+    if described_not_supported.is_empty() {
+        println!("{}", "✅ OK".green());
+    } else {
+        println!("{}", "❌ Mismatch".red());
+        for t in &described_not_supported {
+            println!("  - described but not dispatched: {}", t);
+        }
+    }
+
+    print!("Dispatch vs guard coverage...    ");
+    if supported_not_guarded.is_empty() {
+        println!("{}", "✅ OK".green());
+    } else {
+        println!("{}", "⚠️ Partial".yellow());
+        for t in &supported_not_guarded {
+            println!("  - dispatched but not explicitly guarded: {}", t);
+        }
+    }
+
+    print!("Dispatch vs docs parity...       ");
+    if supported_not_described.is_empty() {
+        println!("{}", "✅ OK".green());
+    } else {
+        println!("{}", "⚠️ Partial".yellow());
+        for t in &supported_not_described {
+            println!("  - dispatched but not documented: {}", t);
+        }
+    }
+
+    print!("Runtime dependency checks...     ");
+    let mut dep_warnings: Vec<String> = Vec::new();
+
+    if let Ok(cfg) = crate::config::Config::load() {
+        if let Some(mcp) = cfg.mcp {
+            if mcp.enabled {
+                for server in mcp.servers {
+                    if !command_exists_quick(&server.command) {
+                        dep_warnings.push(format!(
+                            "MCP server '{}' command '{}' not found",
+                            server.name, server.command
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    if let Ok(workspace) = std::env::current_dir() {
+        let mut loader = crate::skills::SkillLoader::new(workspace);
+        if loader.scan().is_ok() {
+            for skill in loader.skills().values() {
+                match skill.backend.to_lowercase().as_str() {
+                    "deno" => {
+                        let cmd = skill
+                            .deno_command
+                            .as_deref()
+                            .unwrap_or("deno");
+                        if !command_exists_quick(cmd) {
+                            dep_warnings.push(format!(
+                                "Skill '{}' backend=deno requires command '{}'",
+                                skill.name, cmd
+                            ));
+                        }
+                    }
+                    "mcp" => {
+                        if let Some(cmd) = skill.mcp_command.as_deref()
+                            && !command_exists_quick(cmd)
+                        {
+                            dep_warnings.push(format!(
+                                "Skill '{}' backend=mcp command '{}' not found",
+                                skill.name, cmd
+                            ));
+                        }
+                    }
+                    "native" => {
+                        if let Some(cmd) = skill.native_command.as_deref() {
+                            if !command_exists_quick(cmd) {
+                                dep_warnings.push(format!(
+                                    "Skill '{}' backend=native command '{}' not found",
+                                    skill.name, cmd
+                                ));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    if dep_warnings.is_empty() {
+        println!("{}", "✅ OK".green());
+    } else {
+        println!("{}", "⚠️ Partial".yellow());
+        for w in &dep_warnings {
+            println!("  - {}", w);
+        }
+    }
+
+    let hard_fail = !described_not_supported.is_empty();
+    println!("\nWiring Summary:");
+    if hard_fail {
+        println!("{}", "❌ Wiring mismatch found (described tools missing runtime dispatch).".red());
+    } else {
+        println!("{}", "✅ Core wiring parity checks passed.".green());
+    }
+
+    Ok(())
+}
+
+fn extract_described_tools(text: &str) -> HashSet<String> {
+    let mut out = HashSet::new();
+
+    for line in text.lines() {
+        let bytes = line.as_bytes();
+        let mut i = 0;
+
+        while i + 1 < bytes.len() {
+            if bytes[i] == b'*' && bytes[i + 1] == b'*' {
+                let start = i + 2;
+                let mut j = start;
+                while j + 1 < bytes.len() {
+                    if bytes[j] == b'*' && bytes[j + 1] == b'*' {
+                        let token = line[start..j].trim();
+                        if !token.is_empty()
+                            && token
+                                .chars()
+                                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+                        {
+                            out.insert(token.to_string());
+                        }
+                        i = j + 2;
+                        break;
+                    }
+                    j += 1;
+                }
+
+                if j + 1 >= bytes.len() {
+                    break;
+                }
+                continue;
+            }
+            i += 1;
+        }
+    }
+
+    out
+}
+
+fn command_exists_quick(cmd: &str) -> bool {
+    std::process::Command::new(cmd)
+        .arg("--version")
+        .output()
+        .is_ok()
+}
 
 pub async fn run_doctor() -> Result<()> {
     println!("\n🩺 Running Flowbot Doctor...\n");

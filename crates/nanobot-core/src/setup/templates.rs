@@ -26,6 +26,10 @@ pub fn soul_template(personality: Personality) -> &'static str {
     }
 }
 
+pub fn soul_pending_template() -> &'static str {
+    SOUL_PENDING
+}
+
 pub fn identity_template(agent_name: &str, emoji: &str, personality: Personality) -> String {
     format!(
         r#"# IDENTITY.md - Who Am I?
@@ -41,6 +45,29 @@ pub fn identity_template(agent_name: &str, emoji: &str, personality: Personality
 This is my identity. As I learn more about myself, I'll update this file.
 "#,
         agent_name,
+        personality.vibe_description(),
+        emoji
+    )
+}
+
+pub fn identity_pending_template(emoji: &str, personality: Personality) -> String {
+    format!(
+        r#"# IDENTITY.md - Who Am I?
+
+<!-- NANOBOT_NAME_PENDING -->
+
+- **Name:** Assistant
+- **Creature:** AI assistant
+- **Vibe:** {}
+- **Emoji:** {}
+- **Avatar:** (none yet)
+
+---
+
+Name setup was skipped during wizard.
+
+Before normal channel chat continues, complete name from the channel onboarding prompt.
+"#,
         personality.vibe_description(),
         emoji
     )
@@ -293,4 +320,13 @@ These files are your memory across sessions. Read them. Update them. Evolve.
 ---
 
 _This file is yours to create._
+"#;
+
+const SOUL_PENDING: &str = r#"# SOUL.md - Personality Pending
+
+<!-- NANOBOT_PERSONALITY_PENDING -->
+
+Personality setup was skipped during wizard.
+
+Before normal channel chat continues, complete personality from the channel onboarding prompt.
 "#;

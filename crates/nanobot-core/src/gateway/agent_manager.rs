@@ -1,6 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
@@ -49,6 +50,16 @@ pub struct SessionTask {
     pub result: Option<String>,
     pub created_at: u64,
     pub completed_at: Option<u64>,
+    #[serde(default)]
+    pub attempts: u32,
+    #[serde(default)]
+    pub max_retries: u32,
+    #[serde(default)]
+    pub retry_backoff_ms: u64,
+    #[serde(default)]
+    pub timeout_seconds: u64,
+    #[serde(default)]
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,8 +67,29 @@ pub struct SessionTask {
 pub enum TaskStatus {
     Pending,
     Running,
+    Retrying,
+    Paused,
     Completed,
     Failed,
+    Cancelled,
+    TimedOut,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubagentOptions {
+    pub max_retries: u32,
+    pub retry_backoff_ms: u64,
+    pub timeout_seconds: u64,
+}
+
+impl Default for SubagentOptions {
+    fn default() -> Self {
+        Self {
+            max_retries: 0,
+            retry_backoff_ms: 1000,
+            timeout_seconds: 120,
+        }
+    }
 }
 
 /// Multi-agent session manager
@@ -67,6 +99,8 @@ pub struct AgentManager {
     tasks: Arc<Mutex<HashMap<String, SessionTask>>>,
     /// Subagent hierarchy registry (parent_id -> Vec<child_id>)
     hierarchy: Arc<Mutex<HashMap<String, Vec<String>>>>,
+    cancelled_sessions: Arc<Mutex<HashSet<String>>>,
+    paused_sessions: Arc<Mutex<HashSet<String>>>,
     event_tx: Arc<Mutex<Option<mpsc::Sender<AgentEvent>>>>,
 }
 
@@ -76,6 +110,8 @@ impl AgentManager {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             tasks: Arc::new(Mutex::new(HashMap::new())),
             hierarchy: Arc::new(Mutex::new(HashMap::new())),
+            cancelled_sessions: Arc::new(Mutex::new(HashSet::new())),
+            paused_sessions: Arc::new(Mutex::new(HashSet::new())),
             event_tx: Arc::new(Mutex::new(None)),
         }
     }
@@ -172,6 +208,19 @@ impl AgentManager {
 
             let mut tasks = self.tasks.lock().await;
             *tasks = registry.tasks;
+
+            // Rebuild hierarchy from restored sessions
+            let mut hierarchy_map: HashMap<String, Vec<String>> = HashMap::new();
+            for session in sessions.values() {
+                if let Some(parent) = &session.parent_session_id {
+                    hierarchy_map
+                        .entry(parent.clone())
+                        .or_default()
+                        .push(session.id.clone());
+                }
+            }
+            let mut hierarchy = self.hierarchy.lock().await;
+            *hierarchy = hierarchy_map;
         }
         Ok(())
     }
@@ -216,6 +265,27 @@ impl AgentManager {
         cleanup_policy: CleanupPolicy,
         model: Option<String>,
     ) -> Result<(AgentSession, SessionTask)> {
+        self
+            .spawn_subagent_with_options(
+                parent_session_id,
+                task,
+                _label,
+                cleanup_policy,
+                model,
+                SubagentOptions::default(),
+            )
+            .await
+    }
+
+    pub async fn spawn_subagent_with_options(
+        &self,
+        parent_session_id: String,
+        task: String,
+        _label: Option<String>,
+        cleanup_policy: CleanupPolicy,
+        model: Option<String>,
+        options: SubagentOptions,
+    ) -> Result<(AgentSession, SessionTask)> {
         // Create isolated session
         let session = self
             .create_session(
@@ -239,6 +309,11 @@ impl AgentManager {
                 .unwrap()
                 .as_secs(),
             completed_at: None,
+            attempts: 0,
+            max_retries: options.max_retries,
+            retry_backoff_ms: options.retry_backoff_ms,
+            timeout_seconds: options.timeout_seconds,
+            last_error: None,
         };
 
         {
@@ -265,10 +340,6 @@ impl AgentManager {
     fn spawn_task_execution(&self, session: AgentSession, task: SessionTask) {
         let manager = self.clone();
         tokio::spawn(async move {
-            let _ = manager
-                .update_task_status(&task.id, TaskStatus::Running, None)
-                .await;
-
             let _ = manager
                 .broadcast_to_parent(
                     &session.id,
@@ -311,43 +382,158 @@ impl AgentManager {
                 }
             });
 
-            let exec_progress_tx = progress_tx.clone();
-            let result = crate::cron::isolated_agent::execute_agent_message(
-                &session.id,
-                &task.task,
-                session.model.clone(),
-                Some(exec_progress_tx),
-            )
-            .await;
+            let max_attempts = task.max_retries + 1;
+            let timeout = Duration::from_secs(task.timeout_seconds.max(1));
+            let mut attempt: u32 = 0;
+
+            loop {
+                attempt += 1;
+
+                let cancelled = {
+                    let cancelled = manager.cancelled_sessions.lock().await;
+                    cancelled.contains(&session.id)
+                };
+                if cancelled {
+                    let _ = manager
+                        .update_task_status(&task.id, TaskStatus::Cancelled, Some("Cancelled by parent".to_string()))
+                        .await;
+                    break;
+                }
+
+                // Cooperative pause gate (between attempts)
+                loop {
+                    let paused = {
+                        let paused = manager.paused_sessions.lock().await;
+                        paused.contains(&session.id)
+                    };
+                    if !paused {
+                        break;
+                    }
+
+                    let _ = manager
+                        .update_task_status_attempt(&task.id, TaskStatus::Paused, attempt.saturating_sub(1), None, None)
+                        .await;
+
+                    let cancelled_while_paused = {
+                        let cancelled = manager.cancelled_sessions.lock().await;
+                        cancelled.contains(&session.id)
+                    };
+                    if cancelled_while_paused {
+                        let _ = manager
+                            .update_task_status(&task.id, TaskStatus::Cancelled, Some("Cancelled by parent".to_string()))
+                            .await;
+                        break;
+                    }
+
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+
+                let cancelled = {
+                    let cancelled = manager.cancelled_sessions.lock().await;
+                    cancelled.contains(&session.id)
+                };
+                if cancelled {
+                    break;
+                }
+
+                let status = if attempt == 1 { TaskStatus::Running } else { TaskStatus::Retrying };
+                let _ = manager.update_task_status_attempt(&task.id, status, attempt, None, None).await;
+
+                let exec_progress_tx = progress_tx.clone();
+                let result = tokio::time::timeout(
+                    timeout,
+                    crate::cron::isolated_agent::execute_agent_message(
+                        &session.id,
+                        &task.task,
+                        session.model.clone(),
+                        Some(exec_progress_tx),
+                    ),
+                )
+                .await;
+
+                match result {
+                    Ok(Ok(output)) => {
+                        let summary = crate::cron::isolated_agent::truncate_utf8(&output, 2000);
+                        let _ = manager
+                            .update_task_status_attempt(&task.id, TaskStatus::Completed, attempt, Some(output), None)
+                            .await;
+                        let _ = manager
+                            .broadcast_to_parent(
+                                &session.id,
+                                format!("[Subagent {}] Completed\n{}", session.id, summary),
+                            )
+                            .await;
+                        break;
+                    }
+                    Ok(Err(e)) => {
+                        let err_text = e.to_string();
+                        if attempt < max_attempts {
+                            let _ = manager
+                                .broadcast_to_parent(
+                                    &session.id,
+                                    format!(
+                                        "[Subagent {}] Attempt {}/{} failed: {}. Retrying...",
+                                        session.id, attempt, max_attempts, err_text
+                                    ),
+                                )
+                                .await;
+                            tokio::time::sleep(Duration::from_millis(task.retry_backoff_ms)).await;
+                            continue;
+                        }
+                        let _ = manager
+                            .update_task_status_attempt(
+                                &task.id,
+                                TaskStatus::Failed,
+                                attempt,
+                                Some(err_text.clone()),
+                                Some(err_text.clone()),
+                            )
+                            .await;
+                        let _ = manager
+                            .broadcast_to_parent(
+                                &session.id,
+                                format!("[Subagent {}] Failed: {}", session.id, err_text),
+                            )
+                            .await;
+                        break;
+                    }
+                    Err(_) => {
+                        let err_text = format!("Timed out after {}s", timeout.as_secs());
+                        if attempt < max_attempts {
+                            let _ = manager
+                                .broadcast_to_parent(
+                                    &session.id,
+                                    format!(
+                                        "[Subagent {}] Attempt {}/{} timed out. Retrying...",
+                                        session.id, attempt, max_attempts
+                                    ),
+                                )
+                                .await;
+                            tokio::time::sleep(Duration::from_millis(task.retry_backoff_ms)).await;
+                            continue;
+                        }
+                        let _ = manager
+                            .update_task_status_attempt(
+                                &task.id,
+                                TaskStatus::TimedOut,
+                                attempt,
+                                Some(err_text.clone()),
+                                Some(err_text.clone()),
+                            )
+                            .await;
+                        let _ = manager
+                            .broadcast_to_parent(
+                                &session.id,
+                                format!("[Subagent {}] Timed out: {}", session.id, err_text),
+                            )
+                            .await;
+                        break;
+                    }
+                }
+            }
 
             drop(progress_tx);
             let _ = progress_handle.await;
-
-            match result {
-                Ok(output) => {
-                    let summary = crate::cron::isolated_agent::truncate_utf8(&output, 2000);
-                    let _ = manager
-                        .update_task_status(&task.id, TaskStatus::Completed, Some(output))
-                        .await;
-                    let _ = manager
-                        .broadcast_to_parent(
-                            &session.id,
-                            format!("[Subagent {}] Completed\n{}", session.id, summary),
-                        )
-                        .await;
-                }
-                Err(e) => {
-                    let _ = manager
-                        .update_task_status(&task.id, TaskStatus::Failed, Some(e.to_string()))
-                        .await;
-                    let _ = manager
-                        .broadcast_to_parent(
-                            &session.id,
-                            format!("[Subagent {}] Failed: {}", session.id, e),
-                        )
-                        .await;
-                }
-            }
         });
     }
 
@@ -370,11 +556,30 @@ impl AgentManager {
         status: TaskStatus,
         result: Option<String>,
     ) -> Result<()> {
+        self.update_task_status_attempt(task_id, status, 0, result, None).await
+    }
+
+    pub async fn update_task_status_attempt(
+        &self,
+        task_id: &str,
+        status: TaskStatus,
+        attempts: u32,
+        result: Option<String>,
+        last_error: Option<String>,
+    ) -> Result<()> {
         let mut tasks = self.tasks.lock().await;
         if let Some(task) = tasks.get_mut(task_id) {
             task.status = status;
-            task.result = result;
-            if matches!(task.status, TaskStatus::Completed | TaskStatus::Failed) {
+            if attempts > 0 {
+                task.attempts = attempts;
+            }
+            if let Some(r) = result {
+                task.result = Some(r);
+            }
+            if let Some(err) = last_error {
+                task.last_error = Some(err);
+            }
+            if matches!(task.status, TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled | TaskStatus::TimedOut) {
                 task.completed_at = Some(
                     std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
@@ -388,6 +593,84 @@ impl AgentManager {
             Ok(())
         } else {
             Err(anyhow::anyhow!("Task not found: {}", task_id))
+        }
+    }
+
+    pub async fn cancel_session(&self, session_id: &str) -> Result<()> {
+        {
+            let mut cancelled = self.cancelled_sessions.lock().await;
+            cancelled.insert(session_id.to_string());
+        }
+
+        let task_id = {
+            let tasks = self.tasks.lock().await;
+            tasks
+                .values()
+                .find(|t| t.session_id == session_id)
+                .map(|t| t.id.clone())
+        };
+
+        if let Some(task_id) = task_id {
+            self
+                .update_task_status_attempt(
+                    &task_id,
+                    TaskStatus::Cancelled,
+                    0,
+                    Some("Cancelled by parent".to_string()),
+                    Some("Cancelled by parent".to_string()),
+                )
+                .await?;
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("No task found for session {}", session_id))
+        }
+    }
+
+    pub async fn pause_session(&self, session_id: &str) -> Result<()> {
+        {
+            let mut paused = self.paused_sessions.lock().await;
+            paused.insert(session_id.to_string());
+        }
+
+        let task_id = {
+            let tasks = self.tasks.lock().await;
+            tasks
+                .values()
+                .find(|t| t.session_id == session_id)
+                .map(|t| t.id.clone())
+        };
+
+        if let Some(task_id) = task_id {
+            self
+                .update_task_status_attempt(&task_id, TaskStatus::Paused, 0, None, None)
+                .await?;
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("No task found for session {}", session_id))
+        }
+    }
+
+    pub async fn resume_session(&self, session_id: &str) -> Result<()> {
+        {
+            let mut paused = self.paused_sessions.lock().await;
+            paused.remove(session_id);
+        }
+
+        let task_id = {
+            let tasks = self.tasks.lock().await;
+            tasks
+                .values()
+                .find(|t| t.session_id == session_id)
+                .map(|t| t.id.clone())
+        };
+
+        if let Some(task_id) = task_id {
+            self
+                .update_task_status_attempt(&task_id, TaskStatus::Retrying, 0, None, None)
+                .await?;
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("No task found for session {}", session_id))
         }
     }
 
@@ -414,7 +697,13 @@ impl AgentManager {
             }
 
             if let Some(task) = self.get_task_by_session(session_id).await {
-                if matches!(task.status, TaskStatus::Completed | TaskStatus::Failed) {
+                if matches!(
+                    task.status,
+                    TaskStatus::Completed
+                        | TaskStatus::Failed
+                        | TaskStatus::Cancelled
+                        | TaskStatus::TimedOut
+                ) {
                     return Ok(task);
                 }
             } else {
@@ -442,7 +731,7 @@ impl AgentManager {
         let mut recovered = 0;
 
         for task in tasks.values() {
-            if matches!(task.status, TaskStatus::Running) {
+            if matches!(task.status, TaskStatus::Running | TaskStatus::Retrying) {
                 if let Some(session) = sessions.get(&task.session_id) {
                     self.spawn_task_execution(session.clone(), task.clone());
                     recovered += 1;
@@ -475,7 +764,15 @@ impl AgentManager {
             let all_completed = tasks
                 .values()
                 .filter(|t| t.session_id == session_id)
-                .all(|t| matches!(t.status, TaskStatus::Completed | TaskStatus::Failed));
+                .all(|t| {
+                    matches!(
+                        t.status,
+                        TaskStatus::Completed
+                            | TaskStatus::Failed
+                            | TaskStatus::Cancelled
+                            | TaskStatus::TimedOut
+                    )
+                });
 
             if all_completed {
                 sessions.remove(&session_id);

@@ -7,7 +7,9 @@ use super::{SetupOptions, templates::Personality, workspace_mgmt};
 
 pub struct WizardData {
     pub agent_name: String,
+    pub agent_name_pending: bool,
     pub personality: Personality,
+    pub personality_pending: bool,
     pub user_name: String,
     pub timezone: String,
     pub channels: Vec<String>,
@@ -22,11 +24,16 @@ pub struct SetupResult {
     pub should_hatch_tui: bool,
     pub should_start_gateway: bool,
     pub enable_browser: bool,
+    pub browser_use_docker: bool,
+    pub browser_docker_image: String,
+    pub browser_docker_port: u16,
     pub dm_scope: crate::config::DmScope,
     pub should_start_webchat: bool,
     pub should_start_server: bool,
     pub web_port: u16,
     pub server_port: u16,
+    pub teams_webhook: Option<String>,
+    pub google_chat_webhook: Option<String>,
     pub workspace_dir: PathBuf,
 }
 
@@ -50,11 +57,16 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
             should_hatch_tui: false,
             should_start_gateway: false,
             enable_browser: false,
+            browser_use_docker: false,
+            browser_docker_image: "zenika/alpine-chrome:with-puppeteer".to_string(),
+            browser_docker_port: 9222,
             dm_scope: crate::config::DmScope::Main,
             should_start_webchat: false,
             should_start_server: false,
             web_port: 3000,
             server_port: 3000,
+            teams_webhook: None,
+            google_chat_webhook: None,
             workspace_dir: PathBuf::from("."),
         });
     }
@@ -69,16 +81,23 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
     let quick_mode = mode_idx == 0;
 
     // 1. Agent identity
-    let agent_name = Input::<String>::with_theme(&ColorfulTheme::default())
-        .with_prompt("What should I call myself?")
+    let raw_agent_name = Input::<String>::with_theme(&ColorfulTheme::default())
+        .with_prompt("What should I call myself? (type 'skip' to set later in channel)")
         .default("Flowbot".into())
         .interact()?;
+    let agent_name_pending = raw_agent_name.trim().eq_ignore_ascii_case("skip");
+    let agent_name = if agent_name_pending {
+        "Assistant".to_string()
+    } else {
+        raw_agent_name
+    };
 
     let vibe_options = vec![
         "Professional (formal, precise)",
         "Casual (friendly, relaxed)",
         "Chaotic Good (helpful but quirky)",
         "Custom (I'll create my own SOUL.md)",
+        "Skip for now (use Casual)",
     ];
 
     let vibe_idx = if quick_mode {
@@ -96,8 +115,10 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
         1 => Personality::Casual,
         2 => Personality::ChaoticGood,
         3 => Personality::Custom,
+        4 => Personality::Casual,
         _ => Personality::Casual,
     };
+    let personality_pending = vibe_idx == 4;
 
     // 2. Agent emoji
     let emoji_options = vec!["🤖", "🦊", "🐙", "⚡", "🌟", "🔮", "🎯", "Custom"];
@@ -144,7 +165,15 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
 
     // 4. Channel selection
     println!();
-    let channel_options = vec!["Telegram", "Discord", "Slack", "Web Chat (Browser)", "WebSocket API"];
+    let channel_options = vec![
+        "Telegram",
+        "Discord",
+        "Slack",
+        "Teams (Webhook)",
+        "Google Chat (Webhook)",
+        "Web Chat (Browser)",
+        "WebSocket API",
+    ];
     let channel_indices = MultiSelect::with_theme(&ColorfulTheme::default())
         .with_prompt("Enable messaging channels? (Space to select, Enter to confirm)")
         .items(&channel_options)
@@ -272,6 +301,30 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
         }
     }
 
+    // 4e. Webhook URLs for Teams / Google Chat
+    let mut teams_webhook: Option<String> = None;
+    let mut google_chat_webhook: Option<String> = None;
+
+    if channels.contains(&"Teams (Webhook)".to_string()) {
+        println!();
+        let webhook = Input::<String>::with_theme(&ColorfulTheme::default())
+            .with_prompt("Teams webhook URL")
+            .interact()?;
+        if !webhook.trim().is_empty() {
+            teams_webhook = Some(webhook.trim().to_string());
+        }
+    }
+
+    if channels.contains(&"Google Chat (Webhook)".to_string()) {
+        println!();
+        let webhook = Input::<String>::with_theme(&ColorfulTheme::default())
+            .with_prompt("Google Chat webhook URL")
+            .interact()?;
+        if !webhook.trim().is_empty() {
+            google_chat_webhook = Some(webhook.trim().to_string());
+        }
+    }
+
     // 4e. Ports
     let web_port = if channels.contains(&"Web Chat (Browser)".to_string()) {
         if quick_mode {
@@ -334,10 +387,30 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
             .interact()?
     };
 
-    // 7. Confirm setup
+    // 7. Offline speech stack
+    println!();
+    let offline_options = vec![
+        "Install now (choose Whisper/Sherpa models)",
+        "Install later",
+        "Skip",
+    ];
+    let offline_choice = if quick_mode {
+        0
+    } else {
+        Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("Offline speech setup")
+            .items(&offline_options)
+            .default(1)
+            .interact()?
+    };
+
+    // 8. Confirm setup
     println!();
     println!("{}", style("Setup Summary:").bold().cyan());
     println!("  Agent: {} {}", agent_emoji, agent_name);
+    if agent_name_pending {
+        println!("  Agent name status: Pending (will ask in channel)");
+    }
     println!("  Vibe: {}", vibe_options[vibe_idx]);
     println!("  User: {}", user_name);
     println!("  Timezone: {}", timezone);
@@ -352,8 +425,11 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
     println!("  Provider: {}", provider_options[provider_idx]);
     println!("  Service: {}", if should_install_service { "Yes" } else { "No" });
     println!("  DM isolation: {}", dm_options[dm_idx]);
+    println!("  Offline speech: {}", offline_options[offline_choice]);
     println!("  Web Chat: {}", if channels.contains(&"Web Chat (Browser)".to_string()) { "Yes" } else { "No" });
     println!("  WebSocket API: {}", if channels.contains(&"WebSocket API".to_string()) { "Yes" } else { "No" });
+    println!("  Teams webhook: {}", if channels.contains(&"Teams (Webhook)".to_string()) { "Yes" } else { "No" });
+    println!("  Google Chat webhook: {}", if channels.contains(&"Google Chat (Webhook)".to_string()) { "Yes" } else { "No" });
     if channels.contains(&"Web Chat (Browser)".to_string()) {
         println!("  Web Chat port: {}", web_port);
     }
@@ -376,16 +452,21 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
             should_hatch_tui: false,
             should_start_gateway: false,
             enable_browser: false,
+            browser_use_docker: false,
+            browser_docker_image: "zenika/alpine-chrome:with-puppeteer".to_string(),
+            browser_docker_port: 9222,
             dm_scope,
             should_start_webchat: false,
             should_start_server: false,
             web_port,
             server_port,
+            teams_webhook,
+            google_chat_webhook,
             workspace_dir: PathBuf::from("."),
         });
     }
 
-    // 8. Create workspace
+    // 9. Create workspace
     let workspace_dir = opts.workspace_dir.unwrap_or_else(|| {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -397,7 +478,9 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
 
     let wizard_data = WizardData {
         agent_name,
+        agent_name_pending,
         personality,
+        personality_pending,
         user_name,
         timezone,
         channels: channels.clone(),
@@ -406,7 +489,7 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
 
     workspace_mgmt::create_workspace(&workspace_dir, wizard_data).await?;
 
-    // 9. Channel-specific setup
+    // 10. Channel-specific setup
     if channels.contains(&"Telegram".to_string()) {
         println!();
         super::telegram::run_telegram_setup_wizard().await?;
@@ -424,6 +507,22 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
 
     println!();
     println!("{}", style("✅ Workspace created successfully!").green().bold());
+
+    if offline_choice == 0 {
+        println!();
+        println!("{}", style("Installing offline speech components...").bold().cyan());
+        if let Err(err) = super::offline_models::run_offline_models_installer().await {
+            println!("{} {}", style("⚠️  Offline installer failed:").yellow(), err);
+            println!("Run later with: {}", style("nanobot setup --offline-models").green());
+        }
+    } else if offline_choice == 1 {
+        println!();
+        println!(
+            "{}",
+            style("You can install offline speech models later with: nanobot setup --offline-models")
+                .dim()
+        );
+    }
 
     // Quick start
     println!();
@@ -444,7 +543,7 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
     println!("{}", style("Tip:").dim());
     println!("  If you installed the service, it already runs 24x7.");
     
-    // 10. Show pairing system explanation
+    // 11. Show pairing system explanation
     if !channels.is_empty() {
         use super::channel_instructions::{print_pairing_explanation, print_channel_status};
         
@@ -459,7 +558,7 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
         print_channel_status(&channel_statuses);
     }
     
-    // 11. Auto-gateway option
+    // 12. Auto-gateway option
     let has_messaging_channels = channels.iter().any(|c| {
         c == "Telegram" || c == "Discord" || c == "Slack"
     });
@@ -479,7 +578,7 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
         false
     };
     
-    // 12. Prompt for TUI hatch
+    // 13. Prompt for TUI hatch
     let should_hatch_tui = if !should_start_gateway {
         println!();
         println!("{}", style("Start TUI (best option!)").bold());
@@ -496,12 +595,88 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
         false
     };
 
-    // 13. Browser Capability
+    // 14. Browser capability setup (non-technical defaults)
     println!();
-    let enable_browser = Confirm::with_theme(&ColorfulTheme::default())
-        .with_prompt("Enable browser capabilities? (headless Chrome)")
-        .default(true)
+    println!("{}", style("Browser Automation Setup").bold().cyan());
+    let docker_available = command_exists("docker");
+    let local_browser_available = has_local_browser();
+
+    let docker_option = if docker_available {
+        "Docker managed browser (Recommended for easiest setup)".to_string()
+    } else {
+        "Docker managed browser (not detected on this machine)".to_string()
+    };
+
+    let local_option = if local_browser_available {
+        "Use locally installed Chrome/Chromium".to_string()
+    } else {
+        "Use locally installed Chrome/Chromium (not detected)".to_string()
+    };
+
+    let browser_options = vec![
+        "Disable browser tools".to_string(),
+        docker_option,
+        local_option,
+    ];
+
+    let default_browser_idx = if quick_mode {
+        if docker_available {
+            1
+        } else if local_browser_available {
+            2
+        } else {
+            0
+        }
+    } else {
+        if docker_available {
+            1
+        } else {
+            0
+        }
+    };
+
+    let browser_idx = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("How should browser automation run?")
+        .items(&browser_options)
+        .default(default_browser_idx)
         .interact()?;
+
+    let (enable_browser, browser_use_docker) = match browser_idx {
+        1 => (true, true),
+        2 => (true, false),
+        _ => (false, false),
+    };
+
+    let browser_docker_image = "zenika/alpine-chrome:with-puppeteer".to_string();
+    let browser_docker_port = 9222;
+
+    if enable_browser && browser_use_docker {
+        println!(
+            "{}",
+            style("Browser tools enabled with Docker (managed headless Chrome).").green()
+        );
+        if !docker_available {
+            println!(
+                "{}",
+                style("Docker was not detected. Install Docker or switch to local browser mode later.")
+                    .yellow()
+            );
+        }
+    } else if enable_browser {
+        println!(
+            "{}",
+            style("Browser tools enabled with local Chrome/Chromium.").green()
+        );
+        if !local_browser_available {
+            println!(
+                "{}",
+                style("No local Chrome/Chromium detected. Install one browser executable first.")
+                    .yellow()
+            );
+        }
+    } else {
+        println!("{}", style("Browser tools disabled.").dim());
+    }
 
     Ok(SetupResult {
         should_run_oauth,
@@ -510,13 +685,39 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
         should_hatch_tui,
         should_start_gateway,
         enable_browser,
+        browser_use_docker,
+        browser_docker_image,
+        browser_docker_port,
         dm_scope,
         should_start_webchat: channels.contains(&"Web Chat (Browser)".to_string()),
         should_start_server: channels.contains(&"WebSocket API".to_string()),
         web_port,
         server_port,
+        teams_webhook,
+        google_chat_webhook,
         workspace_dir,
     })
+}
+
+fn command_exists(cmd: &str) -> bool {
+    std::process::Command::new(cmd)
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn has_local_browser() -> bool {
+    let candidates = [
+        "chromium",
+        "chromium-browser",
+        "google-chrome",
+        "google-chrome-stable",
+        "chrome",
+        "msedge",
+    ];
+
+    candidates.iter().any(|cmd| command_exists(cmd))
 }
 
 fn print_welcome_banner() {

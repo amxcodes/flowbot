@@ -11,9 +11,16 @@ pub async fn create_workspace(workspace_dir: &Path, data: WizardData) -> Result<
     fs::create_dir_all(workspace_dir.join("memory")).await?;
 
     // Generate file contents
-    let soul = templates::soul_template(data.personality);
-    let identity =
-        templates::identity_template(&data.agent_name, &data.agent_emoji, data.personality);
+    let soul = if data.personality_pending {
+        templates::soul_pending_template()
+    } else {
+        templates::soul_template(data.personality)
+    };
+    let identity = if data.agent_name_pending {
+        templates::identity_pending_template(&data.agent_emoji, data.personality)
+    } else {
+        templates::identity_template(&data.agent_name, &data.agent_emoji, data.personality)
+    };
     let user = templates::user_template(&data.user_name, &data.timezone);
     let agents = templates::agents_template();
     let tools = templates::tools_template();
@@ -51,7 +58,9 @@ pub async fn create_default_workspace(workspace_dir: &Path) -> Result<()> {
 
     let data = WizardData {
         agent_name: "Flowbot".to_string(),
+        agent_name_pending: false,
         personality: Personality::Casual,
+        personality_pending: false,
         user_name: "User".to_string(),
         timezone: "UTC".to_string(),
         channels: vec![],

@@ -27,6 +27,7 @@ pub struct TelegramBot {
     confirmation_service: Arc<tokio::sync::Mutex<crate::tools::ConfirmationService>>,
     confirmation_txs: Arc<tokio::sync::Mutex<std::collections::HashMap<i64, mpsc::Sender<crate::tools::telegram_confirmation::CallbackResponse>>>>,
     confirmation_ready: Arc<tokio::sync::Mutex<std::collections::HashSet<i64>>>,
+    pending_questions: Arc<tokio::sync::Mutex<std::collections::HashMap<String, crate::tools::question::QuestionPayload>>>,
 }
 
 impl TelegramBot {
@@ -46,6 +47,7 @@ impl TelegramBot {
             confirmation_service,
             confirmation_txs: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
             confirmation_ready: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
+            pending_questions: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -59,6 +61,7 @@ impl TelegramBot {
         let confirmation_service = self.confirmation_service.clone();
         let confirmation_txs = self.confirmation_txs.clone();
         let confirmation_ready = self.confirmation_ready.clone();
+        let pending_questions = self.pending_questions.clone();
         let bot_token = self.config.token.clone();
 
         // 1. Create Inbox
@@ -90,6 +93,7 @@ impl TelegramBot {
             let confirmation_service = confirmation_service.clone();
             let confirmation_txs = confirmation_txs.clone();
             let confirmation_ready = confirmation_ready.clone();
+            let pending_questions = pending_questions.clone();
             let bot_token = bot_token.clone();
             
             async move {
@@ -146,7 +150,25 @@ impl TelegramBot {
                 }
 
                 // Normal Message Handling
-                let text = match msg.text() { Some(t) => t.to_string(), None => return Ok(()) };
+                let mut text = match msg.text() { Some(t) => t.to_string(), None => return Ok(()) };
+                let user_id = msg
+                    .from()
+                    .map(|u| u.id.0.to_string())
+                    .unwrap_or_else(|| msg.chat.id.0.to_string());
+
+                match crate::gateway::onboarding::process_onboarding_message("telegram", &user_id, &text).await {
+                    Ok(crate::gateway::onboarding::OnboardingOutcome::ReplyOnly(reply)) => {
+                        let _ = bot.send_message(msg.chat.id, reply).await;
+                        return Ok(());
+                    }
+                    Ok(crate::gateway::onboarding::OnboardingOutcome::NotNeeded) => {}
+                    Err(e) => {
+                        let _ = bot
+                            .send_message(msg.chat.id, format!("❌ Setup error: {}", e))
+                            .await;
+                        return Ok(());
+                    }
+                }
 
                 if let Some((allowed, request_id)) = parse_confirmation_response(&text) {
                     let tx = {
@@ -168,6 +190,34 @@ impl TelegramBot {
                     return Ok(());
                 }
 
+                let session_id = build_session_id(
+                    "telegram",
+                    &msg.chat.id.0.to_string(),
+                    &user_id,
+                    self.config.dm_scope,
+                    msg.chat.is_private(),
+                );
+
+                if let Some(pending) = {
+                    let pending_map = pending_questions.lock().await;
+                    pending_map.get(&session_id).cloned()
+                } {
+                    match crate::tools::question::normalize_question_answer(&pending, &text) {
+                        Ok(normalized) => {
+                            text = normalized;
+                            let mut pending_map = pending_questions.lock().await;
+                            pending_map.remove(&session_id);
+                        }
+                        Err(err_msg) => {
+                            let prompt = crate::tools::question::format_question_prompt(&pending);
+                            let _ = bot
+                                .send_message(msg.chat.id, format!("{}\n{}", err_msg, prompt))
+                                .await;
+                            return Ok(());
+                        }
+                    }
+                }
+
                 if let Some(token) = text.strip_prefix("/set_admin_token ") {
                     let token = token.trim();
                     if token.is_empty() {
@@ -187,20 +237,9 @@ impl TelegramBot {
 
                 // Send to Agent
                 let (response_tx, mut response_rx) = mpsc::channel(100);
-                let user_id = msg
-                    .from()
-                    .map(|u| u.id.0.to_string())
-                    .unwrap_or_else(|| msg.chat.id.0.to_string());
-                let session_id = build_session_id(
-                    "telegram",
-                    &msg.chat.id.0.to_string(),
-                    &user_id,
-                    self.config.dm_scope,
-                    msg.chat.is_private(),
-                );
                 let agent_msg = crate::agent::AgentMessage {
                     session_id: session_id.clone(),
-                    tenant_id: session_id,
+                    tenant_id: session_id.clone(),
                     content: text,
                     response_tx,
                 };
@@ -213,7 +252,20 @@ impl TelegramBot {
                 // Stream response back
                 let mut full = String::new();
                 while let Some(chunk) = response_rx.recv().await {
-                    if let crate::agent::StreamChunk::TextDelta(d) = chunk { full.push_str(&d); }
+                    match chunk {
+                        crate::agent::StreamChunk::TextDelta(d) => full.push_str(&d),
+                        crate::agent::StreamChunk::ToolResult(result) => {
+                            if let Some(payload) = crate::tools::question::parse_question_payload(&result) {
+                                let prompt = crate::tools::question::format_question_prompt(&payload);
+                                {
+                                    let mut pending_map = pending_questions.lock().await;
+                                    pending_map.insert(session_id.clone(), payload);
+                                }
+                                let _ = bot.send_message(msg.chat.id, prompt).await;
+                            }
+                        }
+                        _ => {}
+                    }
                 }
                 if !full.is_empty() { let _ = bot.send_message(msg.chat.id, full).await; }
 

@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
         "url": "https://example.com"
     }).to_string();
     
-    match execute_tool(&fetch_call, None, None, None, None, None, None, None, None, None).await {
+    match execute_tool(&fetch_call, None, None, None, None, None, None, None, None, None, None).await {
         Ok(content) => {
             println!("✅ Fetch successful (length: {} bytes)", content.len());
             if content.contains("Example Domain") {
@@ -63,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
         "args": ["-n", "4", "127.0.0.1"]
     }).to_string();
     
-    let spawn_result = execute_tool(&spawn_call, None, None, None, None, None, None, None, None, None).await?;
+    let spawn_result = execute_tool(&spawn_call, None, None, None, None, None, None, None, None, None, None).await?;
     println!("Spawn Result: {}", spawn_result);
     
     // Extract PID from string "Started process 'ping' with PID: <uuid>"
@@ -76,17 +76,17 @@ async fn main() -> anyhow::Result<()> {
         "tool": "read_process_output",
         "pid": pid
     }).to_string();
-    let output1 = execute_tool(&read_call, None, None, None, None, None, None, None, None, None).await?;
+    let output1 = execute_tool(&read_call, None, None, None, None, None, None, None, None, None, None).await?;
     println!("--- Output 1 ---\n{}", output1);
 
     // Wait more
     sleep(Duration::from_secs(2)).await;
-    let output2 = execute_tool(&read_call, None, None, None, None, None, None, None, None, None).await?;
+    let output2 = execute_tool(&read_call, None, None, None, None, None, None, None, None, None, None).await?;
     println!("--- Output 2 ---\n{}", output2);
 
     // List processes
     let list_call = json!({ "tool": "list_processes" }).to_string();
-    let list_out = execute_tool(&list_call, None, None, None, None, None, None, None, None, None).await?;
+    let list_out = execute_tool(&list_call, None, None, None, None, None, None, None, None, None, None).await?;
     println!("--- Process List ---\n{}", list_out);
 
     // Test Input: Send "hello" (though ping doesn't read it, it verifies the plumbing)
@@ -96,7 +96,7 @@ async fn main() -> anyhow::Result<()> {
         "pid": pid,
         "input": "hello\n"
     }).to_string();
-    match execute_tool(&input_call, None, None, None, None, None, None, None, None, None).await {
+    match execute_tool(&input_call, None, None, None, None, None, None, None, None, None, None).await {
          Ok(res) => println!("✅ Input sent: {}", res),
          Err(e) => eprintln!("❌ Input failed: {}", e),
     }
@@ -106,11 +106,11 @@ async fn main() -> anyhow::Result<()> {
         "tool": "kill_process",
         "pid": pid
     }).to_string();
-    execute_tool(&kill_call, None, None, None, None, None, None, None, None, None).await?;
+    execute_tool(&kill_call, None, None, None, None, None, None, None, None, None, None).await?;
     println!("✅ Process killed.");
     
     // Verify list empty (or exited)
-    let list_out_final = execute_tool(&list_call, None, None, None, None, None, None, None, None, None).await?;
+    let list_out_final = execute_tool(&list_call, None, None, None, None, None, None, None, None, None, None).await?;
     println!("--- Final Process List ---\n{}", list_out_final);
 
     println!("\n✅ All Tests Completed Successfully!");

@@ -88,6 +88,10 @@ pub struct Providers {
     #[serde(default)]
     pub telegram: Option<TelegramConfig>,
     #[serde(default)]
+    pub teams: Option<TeamsConfig>,
+    #[serde(default)]
+    pub google_chat: Option<GoogleChatConfig>,
+    #[serde(default)]
     pub google: Option<GoogleConfig>,
 }
 
@@ -102,6 +106,16 @@ pub struct GoogleConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TelegramConfig {
     pub bot_token: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TeamsConfig {
+    pub webhook_url: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GoogleChatConfig {
+    pub webhook_url: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

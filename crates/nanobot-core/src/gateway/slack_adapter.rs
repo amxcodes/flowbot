@@ -28,6 +28,7 @@ pub struct SlackBot {
     confirmation_service: Arc<tokio::sync::Mutex<crate::tools::ConfirmationService>>,
     confirmation_txs: Arc<tokio::sync::Mutex<std::collections::HashMap<String, mpsc::Sender<crate::tools::ChannelConfirmationResponse>>>>,
     confirmation_ready: Arc<tokio::sync::Mutex<std::collections::HashSet<String>>>,
+    pending_questions: Arc<tokio::sync::Mutex<std::collections::HashMap<String, crate::tools::question::QuestionPayload>>>,
 }
 
 impl SlackBot {
@@ -48,6 +49,7 @@ impl SlackBot {
             confirmation_service,
             confirmation_txs: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
             confirmation_ready: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
+            pending_questions: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -81,6 +83,7 @@ impl SlackBot {
             confirmation_service: self.confirmation_service.clone(),
             confirmation_txs: self.confirmation_txs.clone(),
             confirmation_ready: self.confirmation_ready.clone(),
+            pending_questions: self.pending_questions.clone(),
             confirmation_outbound_tx: inbox_tx.clone(),
         });
         
@@ -163,6 +166,7 @@ struct SlackHandler {
     confirmation_service: Arc<tokio::sync::Mutex<crate::tools::ConfirmationService>>,
     confirmation_txs: Arc<tokio::sync::Mutex<std::collections::HashMap<String, mpsc::Sender<crate::tools::ChannelConfirmationResponse>>>>,
     confirmation_ready: Arc<tokio::sync::Mutex<std::collections::HashSet<String>>>,
+    pending_questions: Arc<tokio::sync::Mutex<std::collections::HashMap<String, crate::tools::question::QuestionPayload>>>,
     confirmation_outbound_tx: mpsc::Sender<ChannelMessage>,
 }
 
@@ -203,7 +207,7 @@ impl SlackHandler {
                           .as_ref()
                           .ok_or(anyhow::anyhow!("No user ID"))?
                           .to_string();
-                     let text = msg_event
+                      let mut text = msg_event
                          .content
                          .as_ref()
                          .and_then(|c| c.text.clone())
@@ -265,9 +269,19 @@ impl SlackHandler {
                           let _ = self.post_message(&channel_id, "Admin token saved").await;
                           return Ok(());
                       }
-                     
-                     // Forward to AgentLoop
-                    let (response_tx, mut response_rx) = mpsc::channel(100);
+
+                       match crate::gateway::onboarding::process_onboarding_message("slack", &user_id, &text).await {
+                          Ok(crate::gateway::onboarding::OnboardingOutcome::ReplyOnly(reply)) => {
+                              let _ = self.post_message(&channel_id, &reply).await;
+                              return Ok(());
+                          }
+                          Ok(crate::gateway::onboarding::OnboardingOutcome::NotNeeded) => {}
+                          Err(e) => {
+                              let _ = self.post_message(&channel_id, &format!("Setup error: {}", e)).await;
+                              return Ok(());
+                          }
+                       }
+
                       let is_dm = is_slack_dm(&msg_event, &channel_id);
                       let session_id = build_session_id(
                           "slack",
@@ -276,9 +290,32 @@ impl SlackHandler {
                           self.config.dm_scope,
                           is_dm,
                       );
+
+                      if let Some(pending) = {
+                          let pending_map = self.pending_questions.lock().await;
+                          pending_map.get(&session_id).cloned()
+                      } {
+                          match crate::tools::question::normalize_question_answer(&pending, &text) {
+                              Ok(normalized) => {
+                                  text = normalized;
+                                  let mut pending_map = self.pending_questions.lock().await;
+                                  pending_map.remove(&session_id);
+                              }
+                              Err(err_msg) => {
+                                  let prompt = crate::tools::question::format_question_prompt(&pending);
+                                  let _ = self
+                                      .post_message(&channel_id, &format!("{}\n{}", err_msg, prompt))
+                                      .await;
+                                  return Ok(());
+                              }
+                          }
+                      }
+                       
+                       // Forward to AgentLoop
+                    let (response_tx, mut response_rx) = mpsc::channel(100);
                     let agent_msg = crate::agent::AgentMessage {
                         session_id: session_id.clone(),
-                        tenant_id: session_id,
+                        tenant_id: session_id.clone(),
                         content: text,
                         response_tx,
                     };
@@ -293,6 +330,16 @@ impl SlackHandler {
                         match chunk {
                             crate::agent::StreamChunk::TextDelta(delta) => {
                                 full_response.push_str(&delta);
+                            }
+                            crate::agent::StreamChunk::ToolResult(result) => {
+                                if let Some(payload) = crate::tools::question::parse_question_payload(&result) {
+                                    let prompt = crate::tools::question::format_question_prompt(&payload);
+                                    {
+                                        let mut pending_map = self.pending_questions.lock().await;
+                                        pending_map.insert(session_id.clone(), payload);
+                                    }
+                                    let _ = self.post_message(&channel_id, &prompt).await;
+                                }
                             }
                             _ => {}
                         }

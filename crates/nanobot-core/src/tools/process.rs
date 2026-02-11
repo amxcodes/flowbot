@@ -23,6 +23,13 @@ struct ProcessHandle {
     kill_tx: tokio::sync::mpsc::Sender<()>,
 }
 
+#[derive(Serialize)]
+struct ProcessSnapshot {
+    pid: u32,
+    buffered_lines: usize,
+    last_line: Option<String>,
+}
+
 impl ProcessManager {
     fn new() -> Self {
         Self {
@@ -159,6 +166,27 @@ impl ProcessManager {
         let _ = tx.send(()).await;
         Ok(())
     }
+
+    fn list(&self) -> Result<Vec<ProcessSnapshot>> {
+        let lock = self
+            .processes
+            .lock()
+            .map_err(|e| anyhow!("Process manager lock poisoned: {}", e))?;
+
+        let mut out = Vec::with_capacity(lock.len());
+        for (pid, handle) in lock.iter() {
+            let (buffered_lines, last_line) = match handle.output_buffer.lock() {
+                Ok(buf) => (buf.len(), buf.last().cloned()),
+                Err(_) => (0, None),
+            };
+            out.push(ProcessSnapshot {
+                pid: *pid,
+                buffered_lines,
+                last_line,
+            });
+        }
+        Ok(out)
+    }
 }
 
 // Tool Arguments
@@ -200,4 +228,12 @@ pub async fn write_process_input(args: WriteInputArgs) -> Result<String> {
 pub async fn terminate_process(args: PidArgs) -> Result<String> {
     PROCESS_MANAGER.kill(args.pid).await?;
     Ok(format!("Terminated PID {}", args.pid))
+}
+
+pub async fn list_processes() -> Result<String> {
+    let processes = PROCESS_MANAGER.list()?;
+    Ok(serde_json::to_string(&serde_json::json!({
+        "count": processes.len(),
+        "processes": processes,
+    }))?)
 }

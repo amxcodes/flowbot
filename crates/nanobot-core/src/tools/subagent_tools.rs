@@ -131,8 +131,12 @@ impl super::definitions::Tool for GetSubagentResultTool {
         let status_str = match task.status {
             crate::gateway::agent_manager::TaskStatus::Pending => "pending",
             crate::gateway::agent_manager::TaskStatus::Running => "running",
+            crate::gateway::agent_manager::TaskStatus::Retrying => "retrying",
+            crate::gateway::agent_manager::TaskStatus::Paused => "paused",
             crate::gateway::agent_manager::TaskStatus::Completed => "completed",
             crate::gateway::agent_manager::TaskStatus::Failed => "failed",
+            crate::gateway::agent_manager::TaskStatus::Cancelled => "cancelled",
+            crate::gateway::agent_manager::TaskStatus::TimedOut => "timed_out",
         };
 
         Ok(json!({
@@ -198,8 +202,12 @@ impl super::definitions::Tool for ListSubagentsTool {
                 let status_str = match task.status {
                     crate::gateway::agent_manager::TaskStatus::Pending => "pending",
                     crate::gateway::agent_manager::TaskStatus::Running => "running",
+                    crate::gateway::agent_manager::TaskStatus::Retrying => "retrying",
+                    crate::gateway::agent_manager::TaskStatus::Paused => "paused",
                     crate::gateway::agent_manager::TaskStatus::Completed => "completed",
                     crate::gateway::agent_manager::TaskStatus::Failed => "failed",
+                    crate::gateway::agent_manager::TaskStatus::Cancelled => "cancelled",
+                    crate::gateway::agent_manager::TaskStatus::TimedOut => "timed_out",
                 };
 
                 subagents.push(json!({

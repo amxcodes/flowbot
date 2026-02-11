@@ -183,6 +183,7 @@ async fn eval_tool(
         None,
         None,
         None,
+        None,
         Some(&*state.permission_manager),
         Some(&state.tool_policy),
         Some(&*state.confirmation_service),

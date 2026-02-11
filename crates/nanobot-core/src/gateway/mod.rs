@@ -7,6 +7,9 @@ pub mod telegram_adapter;
 pub mod registry;
 pub mod slack_adapter;
 pub mod discord_adapter;
+pub mod teams_adapter;
+pub mod google_chat_adapter;
+pub mod onboarding;
 
 
 
@@ -19,6 +22,8 @@ use axum::{
     },
     response::IntoResponse,
     routing::get,
+    Json,
+    http::StatusCode,
 };
 use futures::{sink::SinkExt, stream::StreamExt};
 use serde_json::json;
@@ -29,6 +34,8 @@ use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation};
 use chrono::{Duration, Utc};
 
 use crate::agent::{AgentMessage, StreamChunk};
+use crate::gateway::adapter::build_session_id;
+use crate::config::Config;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct GatewayClaims {
@@ -69,6 +76,7 @@ pub struct Gateway {
     config: GatewayConfig,
     agent_tx: mpsc::Sender<AgentMessage>,
     confirmation_service: std::sync::Arc<tokio::sync::Mutex<crate::tools::ConfirmationService>>,
+    pending_questions: std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, crate::tools::question::QuestionPayload>>>,
 }
 
 impl Gateway {
@@ -81,6 +89,7 @@ impl Gateway {
             config,
             agent_tx,
             confirmation_service,
+            pending_questions: std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -88,6 +97,8 @@ pub async fn start(&self) -> Result<()> {
         let app = Router::new()
             .route("/health", get(health_check))
             .route("/ws", get(ws_handler))
+            .route("/webhooks/teams", axum::routing::post(teams_webhook))
+            .route("/webhooks/google_chat", axum::routing::post(google_chat_webhook))
             .with_state(Arc::new(self.clone())); // Share state
 
         let addr = SocketAddr::from(([0, 0, 0, 0], self.config.port));
@@ -124,6 +135,166 @@ async fn ws_handler(
     State(gateway): State<Arc<Gateway>>,
 ) -> impl IntoResponse {
     ws.on_upgrade(|socket| handle_socket(socket, gateway))
+}
+
+async fn teams_webhook(
+    State(gateway): State<Arc<Gateway>>,
+    Json(payload): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let mut text = payload["text"].as_str().unwrap_or("").to_string();
+    let user_id = payload["user_id"].as_str().unwrap_or("unknown").to_string();
+    let channel_id = payload["channel_id"].as_str().unwrap_or("teams").to_string();
+
+    if text.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "missing text"})));
+    }
+
+    let dm_scope = Config::load().map(|c| c.session.dm_scope).unwrap_or_default();
+    let session_id = build_session_id("teams", &channel_id, &user_id, dm_scope, true);
+
+    if let Some(pending) = {
+        let pending_map = gateway.pending_questions.lock().await;
+        pending_map.get(&session_id).cloned()
+    } {
+        match crate::tools::question::normalize_question_answer(&pending, &text) {
+            Ok(normalized) => {
+                text = normalized;
+                let mut pending_map = gateway.pending_questions.lock().await;
+                pending_map.remove(&session_id);
+            }
+            Err(err_msg) => {
+                let prompt = crate::tools::question::format_question_prompt(&pending);
+                return (StatusCode::OK, Json(json!({"text": format!("{}\n{}", err_msg, prompt)})));
+            }
+        }
+    }
+
+    let (response_tx, mut response_rx) = mpsc::channel(100);
+    let msg = AgentMessage {
+        session_id: session_id.clone(),
+        tenant_id: session_id.clone(),
+        content: text,
+        response_tx,
+    };
+
+    if gateway.agent_tx.send(msg).await.is_err() {
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "agent unavailable"})));
+    }
+
+    let mut full_response = String::new();
+    while let Some(chunk) = response_rx.recv().await {
+        match chunk {
+            StreamChunk::TextDelta(delta) => full_response.push_str(&delta),
+            StreamChunk::ToolResult(result) => {
+                if let Some(payload) = crate::tools::question::parse_question_payload(&result) {
+                    let prompt = crate::tools::question::format_question_prompt(&payload);
+                    {
+                        let mut pending_map = gateway.pending_questions.lock().await;
+                        pending_map.insert(session_id.clone(), payload);
+                    }
+                    if !full_response.is_empty() {
+                        full_response.push_str("\n\n");
+                    }
+                    full_response.push_str(&prompt);
+                }
+            }
+            StreamChunk::Done => break,
+            _ => {}
+        }
+    }
+
+    (StatusCode::OK, Json(json!({"text": full_response})))
+}
+
+async fn google_chat_webhook(
+    State(gateway): State<Arc<Gateway>>,
+    Json(payload): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let mut text = payload
+        .get("message")
+        .and_then(|m| m.get("text"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .to_string();
+    let user_id = payload
+        .get("message")
+        .and_then(|m| m.get("sender"))
+        .and_then(|s| s.get("name"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("users/unknown")
+        .to_string();
+    let channel_id = payload
+        .get("space")
+        .and_then(|s| s.get("name"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("spaces/unknown")
+        .to_string();
+    let is_dm = payload
+        .get("space")
+        .and_then(|s| s.get("type"))
+        .and_then(|t| t.as_str())
+        .map(|t| t.eq_ignore_ascii_case("DM"))
+        .unwrap_or(false);
+
+    if text.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"text": ""})));
+    }
+
+    let dm_scope = Config::load().map(|c| c.session.dm_scope).unwrap_or_default();
+    let session_id = build_session_id("google_chat", &channel_id, &user_id, dm_scope, is_dm);
+
+    if let Some(pending) = {
+        let pending_map = gateway.pending_questions.lock().await;
+        pending_map.get(&session_id).cloned()
+    } {
+        match crate::tools::question::normalize_question_answer(&pending, &text) {
+            Ok(normalized) => {
+                text = normalized;
+                let mut pending_map = gateway.pending_questions.lock().await;
+                pending_map.remove(&session_id);
+            }
+            Err(err_msg) => {
+                let prompt = crate::tools::question::format_question_prompt(&pending);
+                return (StatusCode::OK, Json(json!({"text": format!("{}\n{}", err_msg, prompt)})));
+            }
+        }
+    }
+
+    let (response_tx, mut response_rx) = mpsc::channel(100);
+    let msg = AgentMessage {
+        session_id: session_id.clone(),
+        tenant_id: session_id.clone(),
+        content: text,
+        response_tx,
+    };
+
+    if gateway.agent_tx.send(msg).await.is_err() {
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"text": "Agent unavailable"})));
+    }
+
+    let mut full_response = String::new();
+    while let Some(chunk) = response_rx.recv().await {
+        match chunk {
+            StreamChunk::TextDelta(delta) => full_response.push_str(&delta),
+            StreamChunk::ToolResult(result) => {
+                if let Some(payload) = crate::tools::question::parse_question_payload(&result) {
+                    let prompt = crate::tools::question::format_question_prompt(&payload);
+                    {
+                        let mut pending_map = gateway.pending_questions.lock().await;
+                        pending_map.insert(session_id.clone(), payload);
+                    }
+                    if !full_response.is_empty() {
+                        full_response.push_str("\n\n");
+                    }
+                    full_response.push_str(&prompt);
+                }
+            }
+            StreamChunk::Done => break,
+            _ => {}
+        }
+    }
+
+    (StatusCode::OK, Json(json!({"text": full_response})))
 }
 
 async fn handle_socket(socket: WebSocket, gateway: Arc<Gateway>) {
@@ -174,6 +345,8 @@ async fn handle_socket(socket: WebSocket, gateway: Arc<Gateway>) {
 
     // Spawn task to forward agent responses to WebSocket
     let ws_tx_clone = ws_tx.clone();
+    let pending_questions = gateway.pending_questions.clone();
+    let session_id_for_send = session_id.clone();
     let send_task = tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -192,6 +365,23 @@ async fn handle_socket(socket: WebSocket, gateway: Arc<Gateway>) {
                         StreamChunk::Done => {
                             let msg = json!({ "type": "done" });
                             let _ = ws_tx_clone.lock().await.send(WsMessage::Text(msg.to_string())).await;
+                        }
+                        StreamChunk::ToolResult(result) => {
+                            if let Some(payload) = crate::tools::question::parse_question_payload(&result) {
+                                let prompt = crate::tools::question::format_question_prompt(&payload);
+                                {
+                                    let mut pending_map = pending_questions.lock().await;
+                                    pending_map.insert(session_id_for_send.clone(), payload);
+                                }
+                                let msg = json!({
+                                    "type": "question",
+                                    "prompt": prompt,
+                                });
+                                if let Err(e) = ws_tx_clone.lock().await.send(WsMessage::Text(msg.to_string())).await {
+                                    eprintln!("WS send error: {}", e);
+                                    break;
+                                }
+                            }
                         }
                         _ => {}
                     }
@@ -252,13 +442,32 @@ async fn handle_socket(socket: WebSocket, gateway: Arc<Gateway>) {
                         }
                     }
 
-                    let content = if let Some(json) = parsed_json {
+                    let mut content = if let Some(json) = parsed_json {
                         json["message"].as_str().unwrap_or("").to_string()
                     } else {
                         let msg = json!({"type": "error", "error": "invalid_payload"});
                         let _ = ws_tx.lock().await.send(WsMessage::Text(msg.to_string())).await;
                         continue;
                     };
+
+                    if let Some(pending) = {
+                        let pending_map = gateway.pending_questions.lock().await;
+                        pending_map.get(&session_id).cloned()
+                    } {
+                        match crate::tools::question::normalize_question_answer(&pending, &content) {
+                            Ok(normalized) => {
+                                content = normalized;
+                                let mut pending_map = gateway.pending_questions.lock().await;
+                                pending_map.remove(&session_id);
+                            }
+                            Err(err_msg) => {
+                                let prompt = crate::tools::question::format_question_prompt(&pending);
+                                let msg = json!({"type": "question", "error": err_msg, "prompt": prompt});
+                                let _ = ws_tx.lock().await.send(WsMessage::Text(msg.to_string())).await;
+                                continue;
+                            }
+                        }
+                    }
 
                     if !content.is_empty() {
                         let msg = AgentMessage {

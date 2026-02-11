@@ -5,6 +5,56 @@ use serde_json::Value;
 pub struct ToolGuard;
 
 impl ToolGuard {
+    pub fn guarded_tool_names() -> Vec<&'static str> {
+        vec![
+            "run_command",
+            "spawn_process",
+            "write_file",
+            "edit_file",
+            "read_file",
+            "list_directory",
+            "web_fetch",
+            "glob",
+            "grep",
+            "question",
+            "apply_patch",
+            "todowrite",
+            "parallel",
+            "task",
+            "skill",
+            "mcp_config",
+            "web_search",
+            "script_eval",
+            "memory_search",
+            "memory_save",
+            "list_processes",
+            "cron",
+            "write_process_input",
+            "read_process_output",
+            "kill_process",
+            "sessions_spawn",
+            "spawn_subagent",
+            "get_subagent_result",
+            "list_subagents",
+            "sessions_wait",
+            "sessions_broadcast",
+            "message",
+            "gateway",
+            "sessions_send",
+            "sessions_cancel",
+            "sessions_pause",
+            "sessions_resume",
+            "sessions_history",
+            "session_status",
+            "sessions_list",
+            "agents_list",
+            "memory_get",
+            "llm_task",
+            "tts",
+            "stt",
+        ]
+    }
+
     /// Validate tool arguments against expected schema
     pub fn validate_args(tool_name: &str, args: &Value) -> Result<()> {
         match tool_name {
@@ -20,8 +70,284 @@ impl ToolGuard {
             "web_fetch" => {
                 Self::validate_string_arg(args, "url")?;
             }
+            "glob" => {
+                Self::validate_string_arg(args, "pattern")?;
+            }
+            "grep" => {
+                Self::validate_string_arg(args, "pattern")?;
+            }
+            "question" => {
+                Self::validate_string_arg(args, "question")?;
+            }
+            "apply_patch" => {
+                let ops = args
+                    .get("operations")
+                    .and_then(|v| v.as_array())
+                    .ok_or_else(|| anyhow::anyhow!("Missing 'operations' array"))?;
+                if ops.is_empty() {
+                    return Err(anyhow::anyhow!("operations cannot be empty"));
+                }
+                for (idx, op) in ops.iter().enumerate() {
+                    if let Some(v) = op.get("before_context") {
+                        let s = v.as_str().ok_or_else(|| {
+                            anyhow::anyhow!("operations[{}].before_context must be a string", idx)
+                        })?;
+                        if s.len() > 1000 {
+                            return Err(anyhow::anyhow!(
+                                "operations[{}].before_context too large (max 1000 chars)",
+                                idx
+                            ));
+                        }
+                    }
+                    if let Some(v) = op.get("after_context") {
+                        let s = v.as_str().ok_or_else(|| {
+                            anyhow::anyhow!("operations[{}].after_context must be a string", idx)
+                        })?;
+                        if s.len() > 1000 {
+                            return Err(anyhow::anyhow!(
+                                "operations[{}].after_context too large (max 1000 chars)",
+                                idx
+                            ));
+                        }
+                    }
+                }
+                if let Some(v) = args.get("dry_run").or_else(|| args.get("dryRun")) {
+                    if !v.is_boolean() {
+                        return Err(anyhow::anyhow!("dry_run must be a boolean"));
+                    }
+                }
+                if let Some(v) = args.get("atomic") {
+                    if !v.is_boolean() {
+                        return Err(anyhow::anyhow!("atomic must be a boolean"));
+                    }
+                }
+            }
+            "todowrite" => {
+                let todos = args
+                    .get("todos")
+                    .and_then(|v| v.as_array())
+                    .ok_or_else(|| anyhow::anyhow!("Missing 'todos' array"))?;
+                if todos.is_empty() {
+                    return Err(anyhow::anyhow!("todos cannot be empty"));
+                }
+                for (idx, todo) in todos.iter().enumerate() {
+                    let obj = todo
+                        .as_object()
+                        .ok_or_else(|| anyhow::anyhow!("todos[{}] must be an object", idx))?;
+                    for key in ["id", "content", "status", "priority"] {
+                        let val = obj.get(key).and_then(|v| v.as_str()).ok_or_else(|| {
+                            anyhow::anyhow!("todos[{}].{} must be a string", idx, key)
+                        })?;
+                        if val.trim().is_empty() {
+                            return Err(anyhow::anyhow!("todos[{}].{} cannot be empty", idx, key));
+                        }
+                    }
+
+                    let status = obj.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                    let valid_status = ["pending", "in_progress", "completed", "cancelled"];
+                    if !valid_status.iter().any(|s| s.eq_ignore_ascii_case(status)) {
+                        return Err(anyhow::anyhow!(
+                            "todos[{}].status invalid, expected one of: pending,in_progress,completed,cancelled",
+                            idx
+                        ));
+                    }
+                }
+            }
+            "parallel" => {
+                let calls = args
+                    .get("tool_calls")
+                    .and_then(|v| v.as_array())
+                    .ok_or_else(|| anyhow::anyhow!("Missing 'tool_calls' array"))?;
+                if calls.is_empty() {
+                    return Err(anyhow::anyhow!("tool_calls cannot be empty"));
+                }
+                if calls.len() > 16 {
+                    return Err(anyhow::anyhow!("tool_calls max is 16"));
+                }
+
+                for (idx, call) in calls.iter().enumerate() {
+                    let obj = call
+                        .as_object()
+                        .ok_or_else(|| anyhow::anyhow!("tool_calls[{}] must be an object", idx))?;
+                    let tool = obj
+                        .get("tool")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| anyhow::anyhow!("tool_calls[{}].tool missing", idx))?;
+
+                    let allowed = ["read_file", "list_directory", "glob", "grep", "web_fetch"];
+                    if !allowed.iter().any(|t| t == &tool) {
+                        return Err(anyhow::anyhow!(
+                            "tool_calls[{}].tool '{}' not allowed in parallel mode",
+                            idx,
+                            tool
+                        ));
+                    }
+
+                    if let Some(inner_args) = obj.get("args").and_then(|v| v.as_object()) {
+                        if inner_args.contains_key("tool") {
+                            return Err(anyhow::anyhow!(
+                                "tool_calls[{}].args cannot include reserved key 'tool'",
+                                idx
+                            ));
+                        }
+                    }
+                }
+
+                if let Some(v) = args.get("timeout_ms").or_else(|| args.get("timeoutMs")) {
+                    let ms = v
+                        .as_u64()
+                        .ok_or_else(|| anyhow::anyhow!("timeout_ms must be a positive integer"))?;
+                    if !(1_000..=120_000).contains(&ms) {
+                        return Err(anyhow::anyhow!("timeout_ms out of range (1000..=120000)"));
+                    }
+                }
+            }
+            "task" => {
+                Self::validate_string_arg(args, "prompt")?;
+                if let Some(v) = args.get("description") {
+                    if !v.is_string() {
+                        return Err(anyhow::anyhow!("description must be a string"));
+                    }
+                }
+                if let Some(v) = args
+                    .get("subagent_type")
+                    .or_else(|| args.get("subagentType"))
+                {
+                    if !v.is_string() {
+                        return Err(anyhow::anyhow!("subagent_type must be a string"));
+                    }
+                }
+                if let Some(v) = args
+                    .get("timeout_seconds")
+                    .or_else(|| args.get("timeoutSeconds"))
+                {
+                    let secs = v.as_u64().ok_or_else(|| {
+                        anyhow::anyhow!("timeout_seconds must be a positive integer")
+                    })?;
+                    if !(1..=3600).contains(&secs) {
+                        return Err(anyhow::anyhow!("timeout_seconds out of range (1..=3600)"));
+                    }
+                }
+                if let Some(v) = args.get("max_retries").or_else(|| args.get("maxRetries")) {
+                    let retries = v.as_u64().ok_or_else(|| {
+                        anyhow::anyhow!("max_retries must be a non-negative integer")
+                    })?;
+                    if retries > 10 {
+                        return Err(anyhow::anyhow!("max_retries out of range (0..=10)"));
+                    }
+                }
+                if let Some(v) = args
+                    .get("retry_backoff_ms")
+                    .or_else(|| args.get("retryBackoffMs"))
+                {
+                    let ms = v.as_u64().ok_or_else(|| {
+                        anyhow::anyhow!("retry_backoff_ms must be a non-negative integer")
+                    })?;
+                    if !(0..=60000).contains(&ms) {
+                        return Err(anyhow::anyhow!("retry_backoff_ms out of range (0..=60000)"));
+                    }
+                }
+            }
+            "skill" => {
+                let action = args
+                    .get("action")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("Missing 'action' field"))?;
+                match action {
+                    "create" => {
+                        Self::validate_string_arg(args, "name")?;
+                        if let Some(v) = args.get("backend") {
+                            let backend = v
+                                .as_str()
+                                .ok_or_else(|| anyhow::anyhow!("backend must be a string"))?;
+                            let valid = ["native", "mcp", "deno"];
+                            if !valid.iter().any(|s| s.eq_ignore_ascii_case(backend)) {
+                                return Err(anyhow::anyhow!(
+                                    "backend must be one of: native, mcp, deno"
+                                ));
+                            }
+                        }
+                        if let Some(v) = args.get("description") {
+                            if !v.is_string() {
+                                return Err(anyhow::anyhow!("description must be a string"));
+                            }
+                        }
+                        if let Some(v) = args.get("auto_enable").or_else(|| args.get("autoEnable"))
+                        {
+                            if !v.is_boolean() {
+                                return Err(anyhow::anyhow!("auto_enable must be a boolean"));
+                            }
+                        }
+                    }
+                    "list" => {}
+                    "show" | "enable" | "disable" => {
+                        Self::validate_string_arg(args, "name")?;
+                    }
+                    "run" => {
+                        Self::validate_string_arg(args, "name")?;
+                        Self::validate_string_arg_any(args, &["tool_name", "toolName"])?;
+                        if let Some(v) = args.get("arguments") {
+                            if !v.is_object() {
+                                return Err(anyhow::anyhow!("arguments must be an object"));
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(anyhow::anyhow!(
+                            "action must be one of: create, list, show, enable, disable, run"
+                        ));
+                    }
+                }
+            }
+            "mcp_config" => {
+                let action = args
+                    .get("action")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("Missing 'action' field"))?;
+
+                match action {
+                    "list" | "status" | "connect_all" => {}
+                    "remove" => {
+                        Self::validate_string_arg(args, "name")?;
+                    }
+                    "add" => {
+                        Self::validate_string_arg(args, "name")?;
+                        Self::validate_string_arg(args, "command")?;
+                        let arr = args
+                            .get("args")
+                            .and_then(|v| v.as_array())
+                            .ok_or_else(|| anyhow::anyhow!("Missing 'args' array"))?;
+                        if arr.is_empty() {
+                            return Err(anyhow::anyhow!("args cannot be empty"));
+                        }
+                        if !arr.iter().all(|v| v.is_string()) {
+                            return Err(anyhow::anyhow!("All args must be strings"));
+                        }
+                        if let Some(env) = args.get("env") {
+                            let obj = env
+                                .as_object()
+                                .ok_or_else(|| anyhow::anyhow!("env must be an object"))?;
+                            if !obj.values().all(|v| v.is_string()) {
+                                return Err(anyhow::anyhow!("env values must be strings"));
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(anyhow::anyhow!(
+                            "action must be one of: list, status, add, remove, connect_all"
+                        ));
+                    }
+                }
+            }
             "web_search" => {
                 Self::validate_string_arg(args, "query")?;
+            }
+            "script_eval" => {
+                Self::validate_string_arg(args, "script")?;
+            }
+            "list_processes" => {}
+            "cron" => {
+                Self::validate_string_arg(args, "action")?;
             }
             "memory_search" => {
                 Self::validate_string_arg(args, "query")?;
@@ -36,8 +362,41 @@ impl ToolGuard {
             "read_process_output" | "kill_process" => {
                 Self::validate_pid_arg(args, "pid")?;
             }
-            "sessions_spawn" => {
+            "sessions_spawn" | "spawn_subagent" => {
                 Self::validate_string_arg(args, "task")?;
+                if let Some(v) = args
+                    .get("timeout_seconds")
+                    .or_else(|| args.get("timeoutSeconds"))
+                {
+                    if !v.is_u64() {
+                        return Err(anyhow::anyhow!(
+                            "timeout_seconds must be a positive integer"
+                        ));
+                    }
+                }
+                if let Some(v) = args.get("max_retries").or_else(|| args.get("maxRetries")) {
+                    if !v.is_u64() {
+                        return Err(anyhow::anyhow!(
+                            "max_retries must be a non-negative integer"
+                        ));
+                    }
+                }
+                if let Some(v) = args
+                    .get("retry_backoff_ms")
+                    .or_else(|| args.get("retryBackoffMs"))
+                {
+                    if !v.is_u64() {
+                        return Err(anyhow::anyhow!(
+                            "retry_backoff_ms must be a non-negative integer"
+                        ));
+                    }
+                }
+            }
+            "get_subagent_result" => {
+                Self::validate_string_arg_any(args, &["session_id", "sessionId"])?;
+            }
+            "list_subagents" => {
+                Self::validate_string_arg_any(args, &["parent_session_id", "parentSessionId"])?;
             }
             "sessions_wait" => {
                 Self::validate_string_arg_any(args, &["session_id", "sessionId"])?;
@@ -45,6 +404,49 @@ impl ToolGuard {
             "sessions_broadcast" => {
                 Self::validate_string_arg_any(args, &["session_id", "sessionId"])?;
                 Self::validate_string_arg(args, "message")?;
+            }
+            "message" => {
+                Self::validate_string_arg(args, "message")?;
+            }
+            "gateway" => {
+                Self::validate_string_arg_any(args, &["session_id", "sessionId"])?;
+                Self::validate_string_arg(args, "message")?;
+            }
+            "sessions_send" => {
+                Self::validate_string_arg_any(args, &["session_id", "sessionId"])?;
+                Self::validate_string_arg(args, "message")?;
+            }
+            "sessions_cancel" => {
+                Self::validate_string_arg_any(args, &["session_id", "sessionId"])?;
+            }
+            "sessions_pause" | "sessions_resume" => {
+                Self::validate_string_arg_any(args, &["session_id", "sessionId"])?;
+            }
+            "sessions_history" | "session_status" => {
+                // Optional session_id; if provided must be string
+                if let Some(val) = args.get("session_id").or_else(|| args.get("sessionId")) {
+                    if !val.is_string() {
+                        return Err(anyhow::anyhow!("session_id must be a string"));
+                    }
+                }
+            }
+            "sessions_list" | "agents_list" => {}
+            "memory_get" => {
+                Self::validate_string_arg(args, "id")?;
+            }
+            "llm_task" => {
+                Self::validate_string_arg(args, "prompt")?;
+            }
+            "tts" => {
+                Self::validate_string_arg(args, "text")?;
+                if let Some(val) = args.get("output_path") {
+                    if !val.is_string() {
+                        return Err(anyhow::anyhow!("output_path must be a string"));
+                    }
+                }
+            }
+            "stt" => {
+                Self::validate_string_arg(args, "audio_path")?;
             }
             _ => {
                 // Unknown tools pass through (permissive by default)

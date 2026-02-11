@@ -1,6 +1,6 @@
 use super::embedding_provider::EmbeddingProvider;
 use anyhow::{Result, anyhow};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -341,6 +341,43 @@ impl MemoryManager {
         final_results.truncate(limit);
         
         Ok(final_results)
+    }
+
+    pub fn get_document(&self, id: &str, tenant_id: Option<&str>) -> Result<Option<VectorEntry>> {
+        let tenant_id = tenant_id.ok_or_else(|| anyhow!("tenant_id is required"))?;
+        let conn = self.conn.lock().map_err(|e| anyhow!("Database lock poisoned: {}", e))?;
+
+        let row = conn
+            .query_row(
+                "SELECT id, content, metadata, vector, tenant_id FROM documents WHERE id = ?1 AND tenant_id = ?2",
+                params![id, tenant_id],
+                |row| {
+                    let id: String = row.get(0)?;
+                    let content: String = row.get(1)?;
+                    let metadata_json: String = row.get(2)?;
+                    let vector_blob: Vec<u8> = row.get(3)?;
+                    let tenant_id: String = row.get(4)?;
+
+                    Ok((id, content, metadata_json, vector_blob, tenant_id))
+                },
+            )
+            .optional()?;
+
+        let entry = if let Some((id, content, metadata_json, vector_blob, tenant_id)) = row {
+            let metadata: HashMap<String, String> = serde_json::from_str(&metadata_json)?;
+            let vector: Vec<f32> = serde_json::from_slice(&vector_blob)?;
+            Some(VectorEntry {
+                id,
+                content,
+                metadata,
+                vector,
+                tenant_id,
+            })
+        } else {
+            None
+        };
+
+        Ok(entry)
     }
 }
 

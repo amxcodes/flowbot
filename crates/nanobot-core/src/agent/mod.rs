@@ -170,6 +170,56 @@ fn prune_tool_outputs(chat_history: &mut Vec<Message>, max_chars: usize) {
     }
 }
 
+struct AutoToolArgs {
+    session_id: Option<String>,
+    message: Option<String>,
+}
+
+fn detect_auto_tool(input: &str, current_session: &str) -> Option<(String, AutoToolArgs)> {
+    let trimmed = input.trim();
+    let lower = trimmed.to_lowercase();
+
+    if lower == "/list sessions" || lower == "/sessions list" {
+        return Some(("sessions_list".to_string(), AutoToolArgs { session_id: None, message: None }));
+    }
+
+    if lower.starts_with("/session status") || lower.starts_with("/status session") {
+        let session_id = trimmed.split_whitespace().last().map(|s| s.to_string());
+        return Some((
+            "session_status".to_string(),
+            AutoToolArgs { session_id, message: None },
+        ));
+    }
+
+    if lower.starts_with("/session history") || lower.starts_with("/history session") {
+        let session_id = trimmed.split_whitespace().last().map(|s| s.to_string());
+        return Some((
+            "sessions_history".to_string(),
+            AutoToolArgs { session_id, message: None },
+        ));
+    }
+
+    if lower.starts_with("/send session ") || lower.starts_with("/sessions send ") {
+        let rest = trimmed.splitn(4, ' ').skip(2).collect::<Vec<_>>();
+        if rest.len() >= 2 {
+            return Some((
+                "sessions_send".to_string(),
+                AutoToolArgs { session_id: Some(rest[0].to_string()), message: Some(rest[1].to_string()) },
+            ));
+        }
+    }
+
+    if lower.starts_with("/message ") {
+        let msg = trimmed.strip_prefix("/message ").map(|s| s.to_string());
+        return Some((
+            "message".to_string(),
+            AutoToolArgs { session_id: Some(current_session.to_string()), message: msg },
+        ));
+    }
+
+    None
+}
+
 fn is_tool_output_msg(msg: &Message) -> bool {
     match msg {
         Message::User { content } => content.iter().any(|part| match part {
@@ -212,6 +262,133 @@ pub struct AgentLoop {
 }
 
 impl AgentLoop {
+    fn provider_has_credentials(config: &config::Config, provider: &str) -> bool {
+        match provider {
+            "openai" => config
+                .providers
+                .openai
+                .as_ref()
+                .and_then(|c| {
+                    c.api_keys
+                        .as_ref()
+                        .filter(|keys| !keys.is_empty())
+                        .map(|_| true)
+                        .or_else(|| c.api_key.as_ref().map(|k| !k.is_empty()))
+                })
+                .unwrap_or_else(|| std::env::var("OPENAI_API_KEY").is_ok()),
+            "openrouter" => config
+                .providers
+                .openrouter
+                .as_ref()
+                .and_then(|c| {
+                    c.api_keys
+                        .as_ref()
+                        .filter(|keys| !keys.is_empty())
+                        .map(|_| true)
+                        .or_else(|| c.api_key.as_ref().map(|k| !k.is_empty()))
+                })
+                .unwrap_or(false),
+            "google" => config
+                .providers
+                .google
+                .as_ref()
+                .and_then(|c| {
+                    c.api_keys
+                        .as_ref()
+                        .filter(|keys| !keys.is_empty())
+                        .map(|_| true)
+                        .or_else(|| c.api_key.as_ref().map(|k| !k.is_empty()))
+                })
+                .unwrap_or(false),
+            "antigravity" => true,
+            _ => false,
+        }
+    }
+
+    fn provider_key_count(config: &config::Config, provider: &str) -> usize {
+        match provider {
+            "openai" => {
+                if let Some(c) = config.providers.openai.as_ref() {
+                    if let Some(keys) = c.api_keys.as_ref() {
+                        if !keys.is_empty() {
+                            return keys.len();
+                        }
+                    }
+                    if c.api_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false) {
+                        return 1;
+                    }
+                }
+                if std::env::var("OPENAI_API_KEY").is_ok() {
+                    1
+                } else {
+                    0
+                }
+            }
+            "openrouter" => {
+                if let Some(c) = config.providers.openrouter.as_ref() {
+                    if let Some(keys) = c.api_keys.as_ref() {
+                        if !keys.is_empty() {
+                            return keys.len();
+                        }
+                    }
+                    if c.api_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false) {
+                        return 1;
+                    }
+                }
+                0
+            }
+            "google" => {
+                if let Some(c) = config.providers.google.as_ref() {
+                    if let Some(keys) = c.api_keys.as_ref() {
+                        if !keys.is_empty() {
+                            return keys.len();
+                        }
+                    }
+                    if c.api_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false) {
+                        return 1;
+                    }
+                }
+                0
+            }
+            "antigravity" => 1,
+            _ => 0,
+        }
+    }
+
+    fn normal_provider_chain(config: &config::Config) -> Vec<String> {
+        let default = config.default_provider.to_lowercase();
+        if default == "antigravity" {
+            return vec!["antigravity".to_string()];
+        }
+
+        let mut chain = Vec::new();
+        if Self::provider_has_credentials(config, &default) {
+            chain.push(default.clone());
+        }
+
+        for candidate in ["openai", "openrouter", "google"] {
+            if candidate != default && Self::provider_has_credentials(config, candidate) {
+                chain.push(candidate.to_string());
+            }
+        }
+
+        if chain.is_empty() {
+            chain.push(default);
+        }
+
+        chain
+    }
+
+    fn normal_retry_budget(config: &config::Config) -> u32 {
+        let chain = Self::normal_provider_chain(config);
+        let total_slots: usize = chain
+            .iter()
+            .map(|p| Self::provider_key_count(config, p).max(1))
+            .sum();
+        let rotations = total_slots.saturating_sub(1).max(3);
+        rotations as u32
+    }
+
     /// Create a provider instance based on config and key indices
     pub async fn create_provider(
         config: &config::Config, 
@@ -229,11 +406,16 @@ impl AgentLoop {
             ));
         }
 
-        // Priority 2: Fall back to traditional default_provider
-        let default = config.default_provider.as_str();
-        let index = *indices.get(default).unwrap_or(&0);
-        
-        match default {
+        // Priority 2: Fall back to normal provider path with key/provider rotation
+        let chain = Self::normal_provider_chain(config);
+        let provider_idx = *indices.get("__provider_index").unwrap_or(&0);
+        let provider_name = chain
+            .get(provider_idx % chain.len())
+            .cloned()
+            .unwrap_or_else(|| config.default_provider.clone());
+        let index = *indices.get(&provider_name).unwrap_or(&0);
+
+        match provider_name.as_str() {
             "antigravity" => {
                 let _ag_config = config.providers.antigravity.as_ref();
                 
@@ -318,17 +500,44 @@ impl AgentLoop {
     /// Rotate the current provider's API key
     async fn rotate_provider(&self) -> Result<()> {
         let mut key_indices = self.key_indices.lock().await;
-        // Determine current provider name from config
-        let provider_name = if self.config.llm.is_some() {
-            "meta".to_string()
+        if self.config.llm.is_some() {
+            let entry = key_indices.entry("meta".to_string()).or_insert(0);
+            *entry += 1;
+            tracing::info!("Rotating auth key for provider 'meta' (index: {})", entry);
         } else {
-             self.config.default_provider.clone()
-        };
-        
-        // Increment index
-        let entry = key_indices.entry(provider_name).or_insert(0);
-        *entry += 1;
-        tracing::info!("Rotating auth key for provider '{}' (index: {})", self.config.default_provider,entry);
+            let chain = Self::normal_provider_chain(&self.config);
+            let current_provider_idx = *key_indices.get("__provider_index").unwrap_or(&0) % chain.len();
+            let current_provider = chain[current_provider_idx].clone();
+            let key_count = Self::provider_key_count(&self.config, &current_provider).max(1);
+
+            let entry = key_indices.entry(current_provider.clone()).or_insert(0);
+            *entry += 1;
+
+            if *entry >= key_count {
+                *entry = 0;
+                if chain.len() > 1 {
+                    let next_idx = (current_provider_idx + 1) % chain.len();
+                    key_indices.insert("__provider_index".to_string(), next_idx);
+                    tracing::warn!(
+                        "Provider '{}' keys exhausted. Failing over to provider '{}'",
+                        current_provider,
+                        chain[next_idx]
+                    );
+                } else {
+                    tracing::warn!(
+                        "Provider '{}' keys exhausted but no fallback provider configured",
+                        current_provider
+                    );
+                }
+            } else {
+                tracing::info!(
+                    "Rotating auth key for provider '{}' (index: {}/{})",
+                    current_provider,
+                    *entry,
+                    key_count
+                );
+            }
+        }
         
         // Re-create provider
         let new_provider = Self::create_provider(&self.config, &key_indices).await?;
@@ -799,6 +1008,51 @@ impl AgentLoop {
     // Agent turn loop - Process one message with streaming
     #[tracing::instrument(skip(self, msg), fields(session_id = %msg.session_id))]
     async fn process_streaming(&self, msg: AgentMessage) {
+        if let Some((tool_name, args)) = detect_auto_tool(&msg.content, &msg.session_id) {
+            let mut call = serde_json::Map::new();
+            call.insert("tool".to_string(), serde_json::Value::String(tool_name));
+            if let Some(message) = args.message {
+                call.insert("message".to_string(), serde_json::Value::String(message));
+            }
+            if let Some(session_id) = args.session_id {
+                call.insert("session_id".to_string(), serde_json::Value::String(session_id));
+            }
+            let tool_input = serde_json::Value::Object(call).to_string();
+
+            let result = crate::tools::executor::execute_tool(
+                &tool_input,
+                Some(&self.cron_scheduler),
+                Some(&self.agent_manager),
+                Some(&self.memory_manager),
+                Some(&self.persistence),
+                Some(&*self.permission_manager),
+                Some(&self.tool_policy),
+                Some(&*self.confirmation_service),
+                self.skill_loader.as_ref(),
+                #[cfg(feature = "browser")]
+                self.browser_client.as_ref(),
+                Some(&msg.tenant_id),
+                self.mcp_manager.as_ref(),
+            )
+            .await;
+
+            let response_text = match result {
+                Ok(output) => output,
+                Err(e) => format!("Tool error: {}", e),
+            };
+
+            let _ = msg
+                .response_tx
+                .send(StreamChunk::TextDelta(response_text.clone()))
+                .await;
+            let _ = msg.response_tx.send(StreamChunk::Done).await;
+
+            if let Err(e) = self.save_message(&msg.session_id, "assistant", &response_text) {
+                eprintln!("Failed to save auto-tool response: {}", e);
+            }
+
+            return;
+        }
         // Get adaptive configuration based on current resources
         let adaptive_config = self.resource_monitor.get_adaptive_config();
         let resource_level = self.resource_monitor.get_resource_level();
@@ -915,6 +1169,24 @@ impl AgentLoop {
             })),
         });
 
+        let runtime_personality = if self.system_prompt_override.is_none() {
+            if let Some(ref p) = self.personality {
+                Some(p.clone())
+            } else {
+                let workspace_dir = dirs::home_dir()
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join(".flowbot")
+                    .join("workspace");
+                if workspace_dir.exists() {
+                    personality::PersonalityContext::load(&workspace_dir).await.ok()
+                } else {
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         let max_loops = 5;
         let mut loop_count = 0;
 
@@ -936,7 +1208,7 @@ impl AgentLoop {
                     override_prompt,
                     crate::tools::executor::get_tool_descriptions()
                 )
-            } else if let Some(ref personality) = self.personality {
+            } else if let Some(ref personality) = runtime_personality {
                 format!(
                     "{}\n\n# Available Tools\n{}",
                     personality.to_preamble(),
@@ -983,7 +1255,24 @@ impl AgentLoop {
 
             // Auth Rotation / Retry Loop
             let mut retry_count = 0;
-            let max_retries = 3;
+            let max_retries = self
+                .config
+                .llm
+                .as_ref()
+                .and_then(|cfg| cfg.max_retries)
+                .unwrap_or_else(|| {
+                    if self.config.llm.is_some() {
+                        3
+                    } else {
+                        Self::normal_retry_budget(&self.config)
+                    }
+                });
+            let retry_delay_ms = self
+                .config
+                .llm
+                .as_ref()
+                .and_then(|cfg| cfg.retry_delay_ms)
+                .unwrap_or(0);
             
             let stream = loop {
                 let provider_guard = self.provider.read().await;
@@ -1000,6 +1289,9 @@ impl AgentLoop {
                                  tracing::error!("Failed to rotate provider: {}", rot_err);
                                  // Don't break immediately, maybe next retry works? 
                                  // But if rotation failed, likely no more keys.
+                             }
+                             if retry_delay_ms > 0 {
+                                 tokio::time::sleep(std::time::Duration::from_millis(retry_delay_ms)).await;
                              }
                              continue;
                          }
@@ -1140,6 +1432,7 @@ impl AgentLoop {
                             Some(&self.cron_scheduler),
                             Some(&self.agent_manager),
                             Some(&self.memory_manager),
+                            Some(&self.persistence),
                             Some(&*self.permission_manager),
                             Some(&self.tool_policy),
                             Some(&*self.confirmation_service),

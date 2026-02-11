@@ -23,6 +23,37 @@ impl McpManager {
 
     pub async fn add_server(&self, config: McpServerConfig) -> Result<()> {
         let name = config.name.clone();
+
+        // If identical config already exists and client is alive, treat as idempotent success.
+        // Ensure tool cache is present/fresh for that server before returning.
+        if let Some(existing) = self.configs.read().await.get(&name).cloned() {
+            if existing.command == config.command
+                && existing.args == config.args
+                && existing.env == config.env
+            {
+                if let Some(client) = self.clients.read().await.get(&name).cloned() {
+                    if client.is_alive().await {
+                        let needs_refresh = {
+                            let cache = self.tools_cache.read().await;
+                            !cache.iter().any(|(server, _)| server == &name)
+                        };
+
+                        if needs_refresh {
+                            if let Ok(tools) = client.list_tools().await {
+                                let mut cache = self.tools_cache.write().await;
+                                cache.retain(|(s, _)| s != &name);
+                                for tool in tools {
+                                    cache.push((name.clone(), tool));
+                                }
+                            }
+                        }
+
+                        tracing::debug!("MCP server '{}' already configured and alive", name);
+                        return Ok(());
+                    }
+                }
+            }
+        }
         
         // Store config
         {
@@ -61,9 +92,34 @@ impl McpManager {
         
         // Store client
         let mut clients = self.clients.write().await;
+        // Replace old client if exists (dropping old Arc triggers process cleanup via Drop)
+        clients.remove(&name);
         clients.insert(name, client);
         
         Ok(())
+    }
+
+    pub async fn remove_server(&self, name: &str) -> Result<()> {
+        {
+            let mut clients = self.clients.write().await;
+            clients.remove(name);
+        }
+        {
+            let mut configs = self.configs.write().await;
+            configs.remove(name);
+        }
+        {
+            let mut cache = self.tools_cache.write().await;
+            cache.retain(|(server, _)| server != name);
+        }
+        Ok(())
+    }
+
+    pub async fn list_servers(&self) -> Vec<String> {
+        let configs = self.configs.read().await;
+        let mut names: Vec<String> = configs.keys().cloned().collect();
+        names.sort();
+        names
     }
 
     pub fn start_health_check(&self) {

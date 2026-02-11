@@ -23,6 +23,9 @@ pub mod filesystem;
 pub mod list_directory_tool;
 pub mod policy;
 pub mod process;
+pub mod search;
+pub mod question;
+pub mod todos;
 pub mod read_file_tool;
 pub mod run_command_tool;
 pub mod sessions;
@@ -37,6 +40,9 @@ pub mod kill_process_tool;
 pub mod web_fetch_tool;
 pub mod write_process_input_tool;
 pub mod script_eval_tool;
+pub mod llm_task;
+pub mod tts;
+pub mod stt;
 
 use anyhow::Result;
 
