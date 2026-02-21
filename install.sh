@@ -334,7 +334,7 @@ prepare_source_dir() {
         return 0
     fi
 
-    local repo_url="${NANOBOT_REPO_URL:-https://github.com/amxcodes/nanobot-rs-clean.git}"
+    local repo_url="${NANOBOT_REPO_URL:-}"
     local repo_ref="${NANOBOT_REPO_REF:-main}"
 
     if ! has_cmd git; then
@@ -343,11 +343,43 @@ prepare_source_dir() {
     fi
 
     TEMP_CLONE_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t nanobot-install)"
-    log_info "Fetching source from: ${repo_url} (${repo_ref})"
 
-    if ! git clone --depth 1 --branch "$repo_ref" "$repo_url" "$TEMP_CLONE_DIR"; then
-        log_warn "Could not clone branch '$repo_ref', retrying default branch..."
-        git clone --depth 1 "$repo_url" "$TEMP_CLONE_DIR"
+    local clone_ok=0
+    if [ -n "$repo_url" ]; then
+        log_info "Fetching source from: ${repo_url} (${repo_ref})"
+        if GIT_TERMINAL_PROMPT=0 git clone --depth 1 --branch "$repo_ref" "$repo_url" "$TEMP_CLONE_DIR"; then
+            clone_ok=1
+        else
+            log_warn "Could not clone branch '$repo_ref', retrying default branch..."
+            if GIT_TERMINAL_PROMPT=0 git clone --depth 1 "$repo_url" "$TEMP_CLONE_DIR"; then
+                clone_ok=1
+            fi
+        fi
+    else
+        local candidate_url
+        for candidate_url in \
+            "https://github.com/amxcodes/flowbot.git" \
+            "https://github.com/amxcodes/nanobot-rs-clean.git"
+        do
+            log_info "Trying source repo: ${candidate_url} (${repo_ref})"
+            if GIT_TERMINAL_PROMPT=0 git clone --depth 1 --branch "$repo_ref" "$candidate_url" "$TEMP_CLONE_DIR"; then
+                repo_url="$candidate_url"
+                clone_ok=1
+                break
+            fi
+            if GIT_TERMINAL_PROMPT=0 git clone --depth 1 "$candidate_url" "$TEMP_CLONE_DIR"; then
+                repo_url="$candidate_url"
+                clone_ok=1
+                break
+            fi
+            rm -rf "$TEMP_CLONE_DIR" && TEMP_CLONE_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t nanobot-install)"
+        done
+    fi
+
+    if [ "$clone_ok" -ne 1 ]; then
+        log_err "Could not fetch source repository automatically."
+        log_err "Set NANOBOT_REPO_URL explicitly and rerun installer."
+        exit 1
     fi
 
     if [ ! -f "$TEMP_CLONE_DIR/Cargo.toml" ]; then
@@ -802,12 +834,20 @@ install_openai_whisper_if_possible() {
     fi
 
     log_info "Installing Python package: openai-whisper"
+    local pip_log
+    pip_log="$(mktemp 2>/dev/null || echo /tmp/nanobot-pip.log)"
     # shellcheck disable=SC2086
-    if $py -m pip install -U openai-whisper; then
+    if $py -m pip install -U openai-whisper >"$pip_log" 2>&1; then
         log_ok "openai-whisper installed"
     else
-        log_warn "Could not install openai-whisper automatically"
+        if grep -qi "externally-managed-environment" "$pip_log" 2>/dev/null; then
+            log_warn "Skipping openai-whisper auto-install (PEP 668 externally managed Python)."
+            log_warn "Install later with venv or pipx if you need local STT."
+        else
+            log_warn "Could not install openai-whisper automatically"
+        fi
     fi
+    rm -f "$pip_log" >/dev/null 2>&1 || true
 }
 
 install_deno_if_possible() {
@@ -1184,8 +1224,33 @@ install_packages_best_effort() {
         return 0
     fi
 
-    log_warn "Could not install some optional dependencies automatically: ${pkgs[*]}"
-    return 1
+    log_warn "Bulk optional dependency install failed; retrying one-by-one..."
+    local failed=()
+    local pkg
+    if [ "$pm" = "apt" ]; then
+        local sudo_cmd=""
+        if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+            sudo_cmd="sudo"
+        fi
+        for pkg in "${pkgs[@]}"; do
+            if ! $sudo_cmd apt-get install -y --no-install-recommends "$pkg"; then
+                failed+=("$pkg")
+            fi
+        done
+    else
+        for pkg in "${pkgs[@]}"; do
+            if ! install_packages "$pm" "$pkg"; then
+                failed+=("$pkg")
+            fi
+        done
+    fi
+
+    if [ "${#failed[@]}" -gt 0 ]; then
+        log_warn "Could not install some optional dependencies automatically: ${failed[*]}"
+        return 1
+    fi
+
+    return 0
 }
 
 pkg_for() {
@@ -1211,10 +1276,10 @@ pkg_for() {
                 pip3) echo "python3-pip" ;;
                 ffmpeg) echo "ffmpeg" ;;
                 docker) echo "docker.io" ;;
-                docker-compose) echo "docker-compose-plugin" ;;
-                chromium) echo "chromium-browser" ;;
+                docker-compose) echo "docker-compose" ;;
+                chromium) echo "chromium" ;;
                 chromium-runtime-libs) echo "libnss3 libatk-bridge2.0-0 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libasound2 libxshmfence1 libgtk-3-0 fonts-liberation" ;;
-                nodejs) echo "nodejs npm" ;;
+                nodejs) echo "nodejs" ;;
                 npm) echo "npm" ;;
                 gh) echo "gh" ;;
                 redis-cli) echo "redis-tools" ;;
@@ -1246,7 +1311,7 @@ pkg_for() {
                 docker-compose) echo "docker-compose-plugin" ;;
                 chromium) echo "chromium" ;;
                 chromium-runtime-libs) echo "nss atk at-spi2-atk libXcomposite libXdamage libXrandr mesa-libgbm alsa-lib libxshmfence gtk3 liberation-fonts" ;;
-                nodejs) echo "nodejs npm" ;;
+                nodejs) echo "nodejs" ;;
                 npm) echo "npm" ;;
                 gh) echo "gh" ;;
                 redis-cli) echo "redis" ;;
@@ -1278,7 +1343,7 @@ pkg_for() {
                 docker-compose) echo "docker-compose-plugin" ;;
                 chromium) echo "chromium" ;;
                 chromium-runtime-libs) echo "nss atk at-spi2-atk libXcomposite libXdamage libXrandr mesa-libgbm alsa-lib libxshmfence gtk3 liberation-fonts" ;;
-                nodejs) echo "nodejs npm" ;;
+                nodejs) echo "nodejs" ;;
                 npm) echo "npm" ;;
                 gh) echo "gh" ;;
                 redis-cli) echo "redis" ;;
@@ -1310,7 +1375,7 @@ pkg_for() {
                 docker-compose) echo "docker-compose" ;;
                 chromium) echo "chromium" ;;
                 chromium-runtime-libs) echo "nss atk at-spi2-atk libxcomposite libxdamage libxrandr mesa-libgbm alsa-lib libxshmfence gtk3 ttf-liberation" ;;
-                nodejs) echo "nodejs npm" ;;
+                nodejs) echo "nodejs" ;;
                 npm) echo "npm" ;;
                 gh) echo "github-cli" ;;
                 redis-cli) echo "redis" ;;
@@ -1341,7 +1406,7 @@ pkg_for() {
                 docker-compose) echo "docker-cli-compose" ;;
                 chromium) echo "chromium" ;;
                 chromium-runtime-libs) echo "nss atk at-spi2-atk libxcomposite libxdamage libxrandr mesa-gbm alsa-lib libxshmfence gtk+3.0 ttf-freefont" ;;
-                nodejs) echo "nodejs npm" ;;
+                nodejs) echo "nodejs" ;;
                 npm) echo "npm" ;;
                 gh) echo "gh" ;;
                 redis-cli) echo "redis" ;;
@@ -1373,7 +1438,7 @@ pkg_for() {
                 docker-compose) echo "docker-compose" ;;
                 chromium) echo "chromium" ;;
                 chromium-runtime-libs) echo "libnss3 libatk-bridge-2_0-0 libXcomposite1 libXdamage1 libXrandr2 libgbm1 alsa-lib libxshmfence1 gtk3 liberation-fonts" ;;
-                nodejs) echo "nodejs npm" ;;
+                nodejs) echo "nodejs" ;;
                 npm) echo "npm" ;;
                 gh) echo "gh" ;;
                 redis-cli) echo "redis" ;;
@@ -1593,7 +1658,8 @@ if [ "${#missing_required[@]}" -gt 0 ]; then
     for dep in "${missing_required[@]}"; do
         mapped=$(pkg_for "$PM" "$dep")
         if [ -n "${mapped:-}" ]; then
-            for p in $mapped; do
+            for p in $(printf '%s\n' "$mapped" | tr ' ' '\n'); do
+                [ -n "$p" ] || continue
                 if ! contains_pkg "$p" "${packages[@]}"; then
                     packages+=("$p")
                 fi
@@ -1614,7 +1680,8 @@ if [ "${#missing_optional[@]}" -gt 0 ]; then
     for dep in "${missing_optional[@]}"; do
         mapped=$(pkg_for "$PM" "$dep")
         if [ -n "${mapped:-}" ]; then
-            for p in $mapped; do
+            for p in $(printf '%s\n' "$mapped" | tr ' ' '\n'); do
+                [ -n "$p" ] || continue
                 if ! contains_pkg "$p" "${optional_packages[@]}"; then
                     optional_packages+=("$p")
                 fi
