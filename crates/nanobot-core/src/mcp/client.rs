@@ -1,19 +1,18 @@
 // MCP Client implementation
 use super::types::*;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 // use serde_json::json; // Removed to avoid conflict
 use std::collections::HashMap;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 use tokio::time::timeout;
 
 pub struct McpClient {
-    name: String,
     process: Mutex<Option<Child>>,
     stdin: Mutex<Option<ChildStdin>>,
     pending_requests: Arc<Mutex<HashMap<i64, oneshot::Sender<Result<McpResponse>>>>>,
@@ -23,7 +22,7 @@ pub struct McpClient {
 impl McpClient {
     pub async fn new(config: McpServerConfig) -> Result<Self> {
         tracing::info!("🚀 Starting MCP server: {}", config.name);
-        
+
         let mut cmd = Command::new(&config.command);
         cmd.args(&config.args)
             .stdin(Stdio::piped())
@@ -41,14 +40,26 @@ impl McpClient {
             cmd.env(key, expanded);
         }
 
-        let mut process = cmd.spawn().context(format!("Failed to spawn {}", config.name))?;
+        let mut process = cmd
+            .spawn()
+            .context(format!("Failed to spawn {}", config.name))?;
 
-        let stdin = process.stdin.take().ok_or_else(|| anyhow!("Failed to get stdin"))?;
-        let stdout = process.stdout.take().ok_or_else(|| anyhow!("Failed to get stdout"))?;
-        let stderr = process.stderr.take().ok_or_else(|| anyhow!("Failed to get stderr"))?;
+        let stdin = process
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow!("Failed to get stdin"))?;
+        let stdout = process
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("Failed to get stdout"))?;
+        let stderr = process
+            .stderr
+            .take()
+            .ok_or_else(|| anyhow!("Failed to get stderr"))?;
 
-        let pending_requests: Arc<Mutex<HashMap<i64, oneshot::Sender<Result<McpResponse>>>>> = Arc::new(Mutex::new(HashMap::new()));
-        
+        let pending_requests: Arc<Mutex<HashMap<i64, oneshot::Sender<Result<McpResponse>>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+
         // Spawn stderr reader to log server logs
         let name_clone = config.name.clone();
         tokio::spawn(async move {
@@ -66,28 +77,42 @@ impl McpClient {
             let reader = BufReader::new(stdout);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                if line.trim().is_empty() { continue; }
-                
+                if line.trim().is_empty() {
+                    continue;
+                }
+
                 // Try parsing as generic JSON-RPC message
                 match serde_json::from_str::<serde_json::Value>(&line) {
                     Ok(msg) => {
                         // Check if it's a response (has "id" and ("result" or "error"))
                         if let Some(id_val) = msg.get("id") {
                             if let Some(id) = id_val.as_i64() {
-                                let is_response = msg.get("result").is_some() || msg.get("error").is_some();
+                                let is_response =
+                                    msg.get("result").is_some() || msg.get("error").is_some();
                                 if is_response {
                                     let mut pending = pending_clone.lock().await;
                                     if let Some(tx) = pending.remove(&id) {
                                         // Parse full response
                                         match serde_json::from_value::<McpResponse>(msg) {
-                                            Ok(response) => { let _ = tx.send(Ok(response)); }
-                                            Err(e) => { let _ = tx.send(Err(anyhow::anyhow!("Failed to parse response: {}", e))); }
+                                            Ok(response) => {
+                                                let _ = tx.send(Ok(response));
+                                            }
+                                            Err(e) => {
+                                                let _ = tx.send(Err(anyhow::anyhow!(
+                                                    "Failed to parse response: {}",
+                                                    e
+                                                )));
+                                            }
                                         }
                                     }
                                 } else {
-                                    // Could be a server-initiated request with an ID? 
+                                    // Could be a server-initiated request with an ID?
                                     // For now we assume requests from server need handling separately
-                                    tracing::warn!("[MCP {}] Unhandled request from server: {}", name_clone, line);
+                                    tracing::warn!(
+                                        "[MCP {}] Unhandled request from server: {}",
+                                        name_clone,
+                                        line
+                                    );
                                 }
                             }
                         } else {
@@ -95,16 +120,25 @@ impl McpClient {
                             if let Some(method) = msg.get("method").and_then(|m| m.as_str()) {
                                 if method == "notifications/message" {
                                     if let Some(params) = msg.get("params") {
-                                         tracing::info!("[MCP {}] 🔔 {}", name_clone, params);
+                                        tracing::info!("[MCP {}] 🔔 {}", name_clone, params);
                                     }
                                 } else {
-                                     tracing::debug!("[MCP {}] Notification: {}", name_clone, method);
+                                    tracing::debug!(
+                                        "[MCP {}] Notification: {}",
+                                        name_clone,
+                                        method
+                                    );
                                 }
                             }
                         }
                     }
                     Err(e) => {
-                        tracing::warn!("[MCP {}] Invalid JSON received: {} - Line: {}", name_clone, e, line);
+                        tracing::warn!(
+                            "[MCP {}] Invalid JSON received: {} - Line: {}",
+                            name_clone,
+                            e,
+                            line
+                        );
                     }
                 }
             }
@@ -112,7 +146,6 @@ impl McpClient {
         });
 
         let client = Self {
-            name: config.name.clone(),
             process: Mutex::new(Some(process)),
             stdin: Mutex::new(Some(stdin)),
             pending_requests,
@@ -122,8 +155,15 @@ impl McpClient {
         // Initialize with timeout
         match timeout(Duration::from_secs(10), client.initialize()).await {
             Ok(Ok(_)) => Ok(client),
-            Ok(Err(e)) => Err(anyhow!("Failed to initialize MCP server {}: {}", config.name, e)),
-            Err(_) => Err(anyhow!("Timeout waiting for MCP server {} to initialize", config.name)),
+            Ok(Err(e)) => Err(anyhow!(
+                "Failed to initialize MCP server {}: {}",
+                config.name,
+                e
+            )),
+            Err(_) => Err(anyhow!(
+                "Timeout waiting for MCP server {} to initialize",
+                config.name
+            )),
         }
     }
 
@@ -145,13 +185,13 @@ impl McpClient {
         );
 
         let _response = self.send_request(request).await?;
-        
+
         // Send initialized notification
         let notification = serde_json::json!({
             "jsonrpc": "2.0",
             "method": "notifications/initialized"
         });
-        
+
         self.send_notification(&notification).await?;
 
         Ok(())
@@ -170,7 +210,10 @@ impl McpClient {
     }
 
     async fn send_request(&self, request: McpRequest) -> Result<McpResponse> {
-        let id = request.id.as_i64().ok_or_else(|| anyhow!("Request ID must be an integer"))?;
+        let id = request
+            .id
+            .as_i64()
+            .ok_or_else(|| anyhow!("Request ID must be an integer"))?;
         let (tx, rx) = oneshot::channel();
 
         {
@@ -219,7 +262,10 @@ impl McpClient {
 
         if let Some(result) = response.result {
             let tools: Vec<McpTool> = serde_json::from_value(
-                result.get("tools").cloned().unwrap_or(serde_json::json!([]))
+                result
+                    .get("tools")
+                    .cloned()
+                    .unwrap_or(serde_json::json!([])),
             )?;
             Ok(tools)
         } else {
@@ -227,7 +273,11 @@ impl McpClient {
         }
     }
 
-    pub async fn call_tool(&self, name: &str, arguments: serde_json::Value) -> Result<ToolCallResult> {
+    pub async fn call_tool(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<ToolCallResult> {
         let request = McpRequest::new(
             self.next_id.fetch_add(1, Ordering::SeqCst),
             "tools/call",
@@ -247,10 +297,6 @@ impl McpClient {
         }
     }
 
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
     pub async fn is_alive(&self) -> bool {
         let mut process = self.process.lock().await;
         if let Some(child) = process.as_mut() {
@@ -267,12 +313,12 @@ impl McpClient {
 
 impl Drop for McpClient {
     fn drop(&mut self) {
-        if let Ok(mut process) = self.process.try_lock() {
-            if let Some(mut child) = process.take() {
-                // We're in Drop, so we can't await. 
-                // We'll trust the OS to cleanup properly if we just start kill.
-                let _ = child.start_kill(); 
-            }
+        if let Ok(mut process) = self.process.try_lock()
+            && let Some(mut child) = process.take()
+        {
+            // We're in Drop, so we can't await.
+            // We'll trust the OS to cleanup properly if we just start kill.
+            let _ = child.start_kill();
         }
     }
 }

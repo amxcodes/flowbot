@@ -1,0 +1,25 @@
+{
+  "status": "failed",
+  "requests": 400,
+  "concurrency": 200,
+  "ok": 32,
+  "busy": 336,
+  "errors": 336,
+  "rejection_rate": 0.84,
+  "error_samples": [
+    "Server busy"
+  ],
+  "latency_ms": {
+    "p50": 6402.19,
+    "p95": 35256.28,
+    "p99": 35314.75,
+    "avg": 9560.96
+  },
+  "metrics_delta": {
+    "llm_wait_total_seconds": 2009.952919,
+    "llm_wait_samples": 400,
+    "llm_rejected": 336,
+    "llm_rejection_rate": 0.84
+  },
+  "reason": "rejection_rate_exceeded"
+}

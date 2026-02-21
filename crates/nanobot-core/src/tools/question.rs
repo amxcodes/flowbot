@@ -89,10 +89,11 @@ pub fn normalize_question_answer(q: &QuestionPayload, answer: &str) -> Result<St
 }
 
 fn resolve_single_option(options: &[String], token: &str) -> Result<String, String> {
-    if let Ok(index) = token.parse::<usize>() {
-        if index >= 1 && index <= options.len() {
-            return Ok(options[index - 1].clone());
-        }
+    if let Ok(index) = token.parse::<usize>()
+        && index >= 1
+        && index <= options.len()
+    {
+        return Ok(options[index - 1].clone());
     }
 
     if let Some(found) = options.iter().find(|opt| opt.eq_ignore_ascii_case(token)) {

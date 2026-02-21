@@ -1,5 +1,5 @@
 use anyhow::Result;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
@@ -61,12 +61,23 @@ CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL,
     role TEXT NOT NULL,
+    request_id TEXT,
     content TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(session_id) REFERENCES sessions(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_session_role_request
+    ON messages(session_id, role, request_id);
+
+CREATE TABLE IF NOT EXISTS message_request_commits (
+    session_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    committed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(session_id, request_id, role)
+);
         "#;
 
         conn.execute_batch(MIGRATION_SQL)?;
@@ -77,6 +88,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
     }
 
     /// Add a message to the tree
+    #[cfg(test)]
     pub fn add_message(
         &self,
         session_id: &str,
@@ -94,7 +106,10 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
         &self,
         f: impl FnOnce(&rusqlite::Transaction) -> Result<T>,
     ) -> Result<T> {
-        let mut db = self.db.lock().unwrap();
+        let mut db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Context tree DB lock poisoned: {}", e))?;
         let tx = db.transaction()?;
         let result = f(&tx)?;
         tx.commit()?;
@@ -136,10 +151,10 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
                 )
                 .optional()?;
 
-            if let Some(parent_session_id) = parent_session {
-                if parent_session_id != session_id {
-                    anyhow::bail!("Parent node belongs to a different session");
-                }
+            if let Some(parent_session_id) = parent_session
+                && parent_session_id != session_id
+            {
+                anyhow::bail!("Parent node belongs to a different session");
             }
         }
 
@@ -159,7 +174,10 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
     }
 
     pub fn count_session_nodes(&self, session_id: &str) -> Result<usize> {
-        let db = self.db.lock().unwrap();
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Context tree DB lock poisoned: {}", e))?;
         let count: i64 = db.query_row(
             "SELECT COUNT(*) FROM context_tree WHERE session_id = ?1",
             params![session_id],
@@ -266,7 +284,10 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
 
     /// Get the conversation trace from root to a specific leaf
     pub fn get_trace(&self, leaf_id: &str) -> Result<Vec<ContextNode>> {
-        let db = self.db.lock().unwrap();
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Context tree DB lock poisoned: {}", e))?;
         let mut nodes = Vec::new();
         let mut current_id = Some(leaf_id.to_string());
 
@@ -300,7 +321,10 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
 
     /// Get the current active branch for a session
     pub fn get_active_leaf(&self, session_id: &str) -> Result<Option<String>> {
-        let db = self.db.lock().unwrap();
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Context tree DB lock poisoned: {}", e))?;
         let mut stmt =
             db.prepare("SELECT current_leaf_id FROM active_branches WHERE session_id = ?1")?;
 
@@ -312,8 +336,12 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
     }
 
     /// Fork a conversation at a specific node
+    #[cfg(test)]
     pub fn fork_at(&self, node_id: &str, session_id: &str) -> Result<()> {
-        let db = self.db.lock().unwrap();
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Context tree DB lock poisoned: {}", e))?;
 
         let node_session: Option<String> = db
             .query_row(
@@ -323,10 +351,10 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
             )
             .optional()?;
 
-        if let Some(node_session_id) = node_session {
-            if node_session_id != session_id {
-                anyhow::bail!("Node belongs to a different session");
-            }
+        if let Some(node_session_id) = node_session
+            && node_session_id != session_id
+        {
+            anyhow::bail!("Node belongs to a different session");
         }
 
         // Update active branch to this node
@@ -340,8 +368,12 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
     }
 
     /// Get all children of a node (for branch visualization)
+    #[cfg(test)]
     pub fn get_children(&self, node_id: &str) -> Result<Vec<ContextNode>> {
-        let db = self.db.lock().unwrap();
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Context tree DB lock poisoned: {}", e))?;
         let mut stmt = db.prepare(
             "SELECT id, parent_id, session_id, role, content, model, created_at, metadata
              FROM context_tree WHERE parent_id = ?1
@@ -366,32 +398,6 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
         Ok(nodes)
     }
 
-    /// Get the full tree structure for a session (for visualization)
-    pub fn get_session_tree(&self, session_id: &str) -> Result<Vec<ContextNode>> {
-        let db = self.db.lock().unwrap();
-        let mut stmt = db.prepare(
-            "SELECT id, parent_id, session_id, role, content, model, created_at, metadata
-             FROM context_tree WHERE session_id = ?1
-             ORDER BY created_at ASC",
-        )?;
-
-        let nodes = stmt
-            .query_map(params![session_id], |row| {
-                Ok(ContextNode {
-                    id: row.get(0)?,
-                    parent_id: row.get(1)?,
-                    session_id: row.get(2)?,
-                    role: row.get(3)?,
-                    content: row.get(4)?,
-                    model: row.get(5)?,
-                    created_at: row.get(6)?,
-                    metadata: row.get(7)?,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(nodes)
-    }
 }
 
 #[cfg(test)]

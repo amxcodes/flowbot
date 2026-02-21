@@ -1,29 +1,63 @@
 use anyhow::Result;
-use nanobot_core::tools::{PermissionManager, SecurityProfile};
+use async_trait::async_trait;
+use nanobot_core::tools::{
+    ConfirmationAdapter, ConfirmationRequest, ConfirmationResponse, ConfirmationService,
+    PermissionManager, SecurityProfile,
+};
 use once_cell::sync::Lazy;
 use serde_json::json;
 use tempfile::tempdir;
 
 static CWD_TEST_LOCK: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
 
+// Mock confirmation adapter that always allows (for testing only)
+struct AlwaysAllowAdapter;
+
+#[async_trait]
+impl ConfirmationAdapter for AlwaysAllowAdapter {
+    async fn request_confirmation(
+        &self,
+        request: &ConfirmationRequest,
+    ) -> Result<ConfirmationResponse> {
+        Ok(ConfirmationResponse {
+            id: request.id.clone(),
+            allowed: true,
+            remember: false,
+        })
+    }
+    fn name(&self) -> &str {
+        "test-always-allow"
+    }
+}
+
+fn create_test_confirmation_service() -> ConfirmationService {
+    let mut service = ConfirmationService::new();
+    service.register_adapter(Box::new(AlwaysAllowAdapter));
+    service
+}
+
 async fn exec_tool(json_input: &str) -> Result<String> {
-    let permission_manager = tokio::sync::Mutex::new(PermissionManager::new(SecurityProfile::trust()));
+    let permission_manager =
+        tokio::sync::Mutex::new(PermissionManager::new(SecurityProfile::trust()));
+    let confirmation_service = tokio::sync::Mutex::new(create_test_confirmation_service());
 
     #[cfg(feature = "browser")]
     {
         nanobot_core::tools::executor::execute_tool(
             json_input,
-            None,
-            None,
-            None,
-            None,
-            Some(&permission_manager),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            nanobot_core::tools::executor::ExecuteToolContext {
+                cron_scheduler: None,
+                agent_manager: None,
+                memory_manager: None,
+                persistence: None,
+                permission_manager: Some(&permission_manager),
+                tool_policy: None,
+                confirmation_service: Some(&confirmation_service),
+                skill_loader: None,
+                browser_client: None,
+                tenant_id: Some("test-tenant"),
+                mcp_manager: None,
+            },
         )
         .await
     }
@@ -32,16 +66,18 @@ async fn exec_tool(json_input: &str) -> Result<String> {
     {
         nanobot_core::tools::executor::execute_tool(
             json_input,
-            None,
-            None,
-            None,
-            None,
-            Some(&permission_manager),
-            None,
-            None,
-            None,
-            None,
-            None,
+            nanobot_core::tools::executor::ExecuteToolContext {
+                cron_scheduler: None,
+                agent_manager: None,
+                memory_manager: None,
+                persistence: None,
+                permission_manager: Some(&permission_manager),
+                tool_policy: None,
+                confirmation_service: Some(&confirmation_service),
+                skill_loader: None,
+                tenant_id: Some("test-tenant"),
+                mcp_manager: None,
+            },
         )
         .await
     }
@@ -51,23 +87,27 @@ async fn exec_tool_with_skill_loader(
     json_input: &str,
     skill_loader: &std::sync::Arc<tokio::sync::Mutex<nanobot_core::skills::SkillLoader>>,
 ) -> Result<String> {
-    let permission_manager = tokio::sync::Mutex::new(PermissionManager::new(SecurityProfile::trust()));
+    let permission_manager =
+        tokio::sync::Mutex::new(PermissionManager::new(SecurityProfile::trust()));
+    let confirmation_service = tokio::sync::Mutex::new(create_test_confirmation_service());
 
     #[cfg(feature = "browser")]
     {
         nanobot_core::tools::executor::execute_tool(
             json_input,
-            None,
-            None,
-            None,
-            None,
-            Some(&permission_manager),
-            None,
-            None,
-            Some(skill_loader),
-            None,
-            None,
-            None,
+            nanobot_core::tools::executor::ExecuteToolContext {
+                cron_scheduler: None,
+                agent_manager: None,
+                memory_manager: None,
+                persistence: None,
+                permission_manager: Some(&permission_manager),
+                tool_policy: None,
+                confirmation_service: Some(&confirmation_service),
+                skill_loader: Some(skill_loader),
+                browser_client: None,
+                tenant_id: Some("test-tenant"),
+                mcp_manager: None,
+            },
         )
         .await
     }
@@ -76,39 +116,44 @@ async fn exec_tool_with_skill_loader(
     {
         nanobot_core::tools::executor::execute_tool(
             json_input,
-            None,
-            None,
-            None,
-            None,
-            Some(&permission_manager),
-            None,
-            None,
-            Some(skill_loader),
-            None,
-            None,
+            nanobot_core::tools::executor::ExecuteToolContext {
+                cron_scheduler: None,
+                agent_manager: None,
+                memory_manager: None,
+                persistence: None,
+                permission_manager: Some(&permission_manager),
+                tool_policy: None,
+                confirmation_service: Some(&confirmation_service),
+                skill_loader: Some(skill_loader),
+                tenant_id: Some("test-tenant"),
+                mcp_manager: None,
+            },
         )
         .await
     }
 }
 
 async fn exec_tool_with_tenant(json_input: &str, tenant_id: &str) -> Result<String> {
-    let permission_manager = tokio::sync::Mutex::new(PermissionManager::new(SecurityProfile::trust()));
+    let permission_manager =
+        tokio::sync::Mutex::new(PermissionManager::new(SecurityProfile::trust()));
 
     #[cfg(feature = "browser")]
     {
         nanobot_core::tools::executor::execute_tool(
             json_input,
-            None,
-            None,
-            None,
-            None,
-            Some(&permission_manager),
-            None,
-            None,
-            None,
-            None,
-            Some(tenant_id),
-            None,
+            nanobot_core::tools::executor::ExecuteToolContext {
+                cron_scheduler: None,
+                agent_manager: None,
+                memory_manager: None,
+                persistence: None,
+                permission_manager: Some(&permission_manager),
+                tool_policy: None,
+                confirmation_service: None,
+                skill_loader: None,
+                browser_client: None,
+                tenant_id: Some(tenant_id),
+                mcp_manager: None,
+            },
         )
         .await
     }
@@ -117,16 +162,18 @@ async fn exec_tool_with_tenant(json_input: &str, tenant_id: &str) -> Result<Stri
     {
         nanobot_core::tools::executor::execute_tool(
             json_input,
-            None,
-            None,
-            None,
-            None,
-            Some(&permission_manager),
-            None,
-            None,
-            None,
-            Some(tenant_id),
-            None,
+            nanobot_core::tools::executor::ExecuteToolContext {
+                cron_scheduler: None,
+                agent_manager: None,
+                memory_manager: None,
+                persistence: None,
+                permission_manager: Some(&permission_manager),
+                tool_policy: None,
+                confirmation_service: None,
+                skill_loader: None,
+                tenant_id: Some(tenant_id),
+                mcp_manager: None,
+            },
         )
         .await
     }
@@ -161,7 +208,10 @@ async fn grep_tool_matches_content() -> Result<()> {
     let dir = tempdir()?;
     let root = dir.path();
     std::fs::create_dir_all(root.join("src"))?;
-    std::fs::write(root.join("src").join("main.rs"), "fn main() { println!(\"hi\"); }\n")?;
+    std::fs::write(
+        root.join("src").join("main.rs"),
+        "fn main() { println!(\"hi\"); }\n",
+    )?;
 
     let input = json!({
         "tool": "grep",
@@ -272,7 +322,7 @@ async fn apply_patch_atomic_rolls_back_on_failure() -> Result<()> {
     })
     .to_string();
 
-    let err = exec_tool(&input).await.err().expect("should fail");
+    let err = exec_tool(&input).await.expect_err("should fail");
     assert!(err.to_string().contains("rolled back"));
     let content = std::fs::read_to_string(&file)?;
     assert!(content.contains("hello world"));
@@ -284,10 +334,7 @@ async fn apply_patch_context_aware_update_targets_window() -> Result<()> {
     let dir = tempdir()?;
     let root = dir.path();
     let file = root.join("ctx.txt");
-    std::fs::write(
-        &file,
-        "alpha\nBEGIN\nvalue=old\nEND\nomega\nvalue=old\n",
-    )?;
+    std::fs::write(&file, "alpha\nBEGIN\nvalue=old\nEND\nomega\nvalue=old\n")?;
 
     let input = json!({
         "tool": "apply_patch",
@@ -422,7 +469,9 @@ async fn parallel_tool_rejects_unsafe_tool_calls() -> Result<()> {
     })
     .to_string();
 
-    let err = exec_tool(&input).await.err().expect("should reject unsafe call");
+    let err = exec_tool(&input)
+        .await
+        .expect_err("should reject unsafe call");
     assert!(err.to_string().contains("not allowed in parallel mode"));
     Ok(())
 }
@@ -443,8 +492,95 @@ async fn task_tool_requires_agent_manager_context() -> Result<()> {
 }
 
 #[tokio::test]
+async fn sessions_send_requires_agent_manager_context() -> Result<()> {
+    let input = json!({
+        "tool": "sessions_send",
+        "session_id": "main",
+        "message": "ping"
+    })
+    .to_string();
+
+    let output = exec_tool(&input).await?;
+    let parsed: serde_json::Value = serde_json::from_str(&output)?;
+    assert_eq!(parsed["status"], "error");
+    assert_eq!(parsed["code"], "AGENT_MANAGER_UNAVAILABLE");
+    assert!(
+        parsed["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Agent manager not initialized")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn sessions_history_requires_persistence_without_manager() -> Result<()> {
+    let input = json!({
+        "tool": "sessions_history",
+        "session_id": "main"
+    })
+    .to_string();
+
+    let output = exec_tool(&input).await?;
+    let parsed: serde_json::Value = serde_json::from_str(&output)?;
+    assert_eq!(parsed["status"], "error");
+    assert_eq!(parsed["code"], "PERSISTENCE_UNAVAILABLE");
+    assert!(
+        parsed["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Persistence manager not initialized")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn cron_tool_requires_scheduler_context() -> Result<()> {
+    let input = json!({
+        "tool": "cron",
+        "action": "list"
+    })
+    .to_string();
+
+    let output = exec_tool(&input).await?;
+    let parsed: serde_json::Value = serde_json::from_str(&output)?;
+    assert_eq!(parsed["status"], "error");
+    assert_eq!(parsed["code"], "CRON_SCHEDULER_UNAVAILABLE");
+    Ok(())
+}
+
+#[tokio::test]
+async fn memory_tool_requires_manager_context() -> Result<()> {
+    let input = json!({
+        "tool": "memory_save",
+        "content": "remember this"
+    })
+    .to_string();
+
+    let output = exec_tool(&input).await?;
+    let parsed: serde_json::Value = serde_json::from_str(&output)?;
+    assert_eq!(parsed["status"], "error");
+    assert_eq!(parsed["code"], "MEMORY_MANAGER_UNAVAILABLE");
+    Ok(())
+}
+
+#[tokio::test]
 async fn skill_tool_lists_loaded_skills() -> Result<()> {
     let dir = tempdir()?;
+    let bundled = dir.path().join("bundled");
+    let managed = dir.path().join("managed");
+    std::fs::create_dir_all(&bundled)?;
+    std::fs::create_dir_all(&managed)?;
+    unsafe {
+        std::env::set_var(
+            "NANOBOT_BUNDLED_SKILLS_DIR",
+            bundled.to_string_lossy().to_string(),
+        );
+        std::env::set_var(
+            "NANOBOT_MANAGED_SKILLS_DIR",
+            managed.to_string_lossy().to_string(),
+        );
+    }
 
     let skill_dir = dir.path().join("skills").join("github");
     std::fs::create_dir_all(&skill_dir)?;
@@ -467,6 +603,11 @@ async fn skill_tool_lists_loaded_skills() -> Result<()> {
     let parsed: serde_json::Value = serde_json::from_str(&output)?;
     assert_eq!(parsed["count"], 1);
     assert!(parsed["skills"].to_string().contains("github"));
+
+    unsafe {
+        std::env::remove_var("NANOBOT_BUNDLED_SKILLS_DIR");
+        std::env::remove_var("NANOBOT_MANAGED_SKILLS_DIR");
+    }
 
     Ok(())
 }
@@ -539,9 +680,9 @@ async fn skill_tool_run_mcp_requires_manager() -> Result<()> {
 
     let err = exec_tool_with_skill_loader(&input, &loader)
         .await
-        .err()
-        .expect("expected error without MCP manager");
+        .expect_err("expected error without MCP manager");
     assert!(err.to_string().contains("MCP manager not initialized"));
+    assert!(err.to_string().contains("SKILL_MCP_MANAGER_UNAVAILABLE"));
 
     Ok(())
 }
@@ -664,9 +805,9 @@ async fn skill_tool_run_deno_requires_script() -> Result<()> {
 
     let err = exec_tool_with_skill_loader(&run, &loader)
         .await
-        .err()
-        .expect("expected deno config error");
+        .expect_err("expected deno config error");
     assert!(err.to_string().contains("missing deno_script"));
+    assert!(err.to_string().contains("SKILL_DENO_SCRIPT_MISSING"));
     Ok(())
 }
 
@@ -704,8 +845,69 @@ async fn skill_tool_run_native_requires_command() -> Result<()> {
 
     let err = exec_tool_with_skill_loader(&run, &loader)
         .await
-        .err()
-        .expect("expected native config error");
+        .expect_err("expected native config error");
     assert!(err.to_string().contains("missing native_command"));
+    assert!(err.to_string().contains("SKILL_NATIVE_COMMAND_MISSING"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_tool_deno_missing_uses_node_fallback_reason_code() -> Result<()> {
+    if std::process::Command::new("node")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(());
+    }
+
+    let dir = tempdir()?;
+    let skill_dir = dir.path().join("skills").join("fallback_demo");
+    std::fs::create_dir_all(&skill_dir)?;
+
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: fallback_demo\ndescription: \"Fallback demo\"\nbackend: deno\ndeno_script: skills/fallback_demo/main.js\ndeno_command: missing-deno-binary\n---\n\n# Fallback Demo\n\n## Tools Provided\n\n- `demo_tool`: run demo\n",
+    )?;
+    std::fs::write(
+        skill_dir.join("main.js"),
+        "console.log(JSON.stringify({ok:true, tool: process.argv[2] || null}));\n",
+    )?;
+
+    let loader = std::sync::Arc::new(tokio::sync::Mutex::new(
+        nanobot_core::skills::SkillLoader::new(dir.path().to_path_buf()),
+    ));
+
+    let enable = json!({
+        "tool": "skill",
+        "action": "enable",
+        "name": "fallback_demo"
+    })
+    .to_string();
+    let _ = exec_tool_with_skill_loader(&enable, &loader).await?;
+
+    let run = json!({
+        "tool": "skill",
+        "action": "run",
+        "name": "fallback_demo",
+        "tool_name": "demo_tool",
+        "arguments": {"a": 1}
+    })
+    .to_string();
+
+    match exec_tool_with_skill_loader(&run, &loader).await {
+        Ok(output) => {
+            let parsed: serde_json::Value = serde_json::from_str(&output)?;
+            assert_eq!(parsed["backend"], "node-fallback");
+            assert_eq!(parsed["reason_code"], "SKILL_FALLBACK_DENO_MISSING");
+        }
+        Err(err) => {
+            let text = err.to_string();
+            assert!(
+                text.contains("SKILL_NODE_FALLBACK_FAILED")
+                    || text.contains("SKILL_NODE_FALLBACK_PERMISSION_BLOCKED")
+            );
+        }
+    }
     Ok(())
 }

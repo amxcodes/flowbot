@@ -8,11 +8,10 @@ pub async fn check_telegram(config: &Result<Config, anyhow::Error>) -> bool {
 
     // 1. Resolve Token
     let token = if let Ok(cfg) = config {
-        if let Some(ref tg) = cfg.providers.telegram {
-            Some(tg.bot_token.clone())
-        } else {
-            None
-        }
+        cfg.providers
+            .telegram
+            .as_ref()
+            .map(|tg| tg.bot_token.clone())
     } else {
         None
     };

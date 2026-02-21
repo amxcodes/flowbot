@@ -25,6 +25,7 @@ pub async fn create_workspace(workspace_dir: &Path, data: WizardData) -> Result<
     let agents = templates::agents_template();
     let tools = templates::tools_template();
     let bootstrap = templates::bootstrap_template(&data.agent_name, &data.user_name);
+    let heartbeat = templates::heartbeat_template(true, "0 9 * * *", "UTC");
 
     // Write files
     fs::write(workspace_dir.join("SOUL.md"), soul).await?;
@@ -33,6 +34,7 @@ pub async fn create_workspace(workspace_dir: &Path, data: WizardData) -> Result<
     fs::write(workspace_dir.join("AGENTS.md"), agents).await?;
     fs::write(workspace_dir.join("TOOLS.md"), tools).await?;
     fs::write(workspace_dir.join("BOOTSTRAP.md"), bootstrap).await?;
+    fs::write(workspace_dir.join("HEARTBEAT.md"), heartbeat).await?;
 
     // Create empty memory file
     fs::write(
@@ -47,6 +49,7 @@ pub async fn create_workspace(workspace_dir: &Path, data: WizardData) -> Result<
     println!("  ✓ Created AGENTS.md");
     println!("  ✓ Created TOOLS.md");
     println!("  ✓ Created BOOTSTRAP.md");
+    println!("  ✓ Created HEARTBEAT.md");
     println!("  ✓ Created memory/ directory");
 
     Ok(())
@@ -91,7 +94,7 @@ pub async fn edit_file(file_type: &str) -> Result<()> {
 
     if !filepath.exists() {
         return Err(anyhow::anyhow!(
-            "File not found: {}. Run 'flowbot setup' first.",
+            "File not found: {}. Run 'nanobot setup' first.",
             filepath.display()
         ));
     }
@@ -126,7 +129,7 @@ pub async fn show() -> Result<()> {
 
     if !workspace_dir.exists() {
         println!("No workspace found at: {}", workspace_dir.display());
-        println!("Run 'flowbot setup' to create one.");
+        println!("Run 'nanobot setup' to create one.");
         return Ok(());
     }
 
@@ -156,9 +159,9 @@ pub async fn show() -> Result<()> {
 
     println!();
     println!("Edit files:");
-    println!("  flowbot workspace:edit soul");
-    println!("  flowbot workspace:edit identity");
-    println!("  flowbot workspace:edit user");
+    println!("  nanobot workspace edit soul");
+    println!("  nanobot workspace edit identity");
+    println!("  nanobot workspace edit user");
 
     Ok(())
 }
@@ -172,7 +175,7 @@ pub async fn reset() -> Result<()> {
 
     if !workspace_dir.exists() {
         return Err(anyhow::anyhow!(
-            "No workspace found. Run 'flowbot setup' first."
+            "No workspace found. Run 'nanobot setup' first."
         ));
     }
 
@@ -203,8 +206,5 @@ pub async fn reset() -> Result<()> {
 }
 
 fn get_workspace_dir() -> Result<std::path::PathBuf> {
-    Ok(dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?
-        .join(".flowbot")
-        .join("workspace"))
+    Ok(crate::workspace::resolve_workspace_dir())
 }

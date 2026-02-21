@@ -1,9 +1,9 @@
 use anyhow::Result;
 use reqwest::Client;
-use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
-use rig::completion::message::{AssistantContent, UserContent};
-use rig::streaming::StreamingCompletionResponse;
 use rig::OneOrMany;
+use rig::completion::message::{AssistantContent, UserContent};
+use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
+use rig::streaming::StreamingCompletionResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -38,7 +38,9 @@ impl CompletionModel for GoogleCompletionModel {
 
         let body = build_gemini_request(&request);
 
-        let response = self.client.post(&url)
+        let response = self
+            .client
+            .post(&url)
             .json(&body)
             .send()
             .await
@@ -46,10 +48,15 @@ impl CompletionModel for GoogleCompletionModel {
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            return Err(CompletionError::ProviderError(format!("Google API Error: {}", error_text)));
+            return Err(CompletionError::ProviderError(format!(
+                "Google API Error: {}",
+                error_text
+            )));
         }
 
-        let json_resp: serde_json::Value = response.json().await
+        let json_resp: serde_json::Value = response
+            .json()
+            .await
             .map_err(|e| CompletionError::ProviderError(e.to_string()))?;
 
         // Extract text from the first candidate
@@ -69,53 +76,61 @@ impl CompletionModel for GoogleCompletionModel {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-         let url = format!(
+        let url = format!(
             "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?alt=sse&key={}",
             self.model, self.api_key
         );
 
         let body = build_gemini_request(&request);
 
-        let response = self.client.post(&url)
+        let response = self
+            .client
+            .post(&url)
             .json(&body)
             .send()
             .await
             .map_err(|e| CompletionError::ProviderError(e.to_string()))?;
 
         if !response.status().is_success() {
-             let error_text = response.text().await.unwrap_or_default();
-            return Err(CompletionError::ProviderError(format!("Google API Error: {}", error_text)));
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(CompletionError::ProviderError(format!(
+                "Google API Error: {}",
+                error_text
+            )));
         }
 
         let stream = response.bytes_stream();
-        
+
         use eventsource_stream::Eventsource;
         use futures::StreamExt;
-        
+
         let event_stream = stream.eventsource();
-        
+
         // Map SEE events to GoogleStreamingResponse
         let mapped_stream = event_stream.map(|event_res| {
-             match event_res {
-                 Ok(event) => {
-                     let data = event.data;
-                     if data == "[DONE]" {
-                         // Rig expects a Final variant to close stream properly, but empty message works too
-                         return Ok(rig::streaming::RawStreamingChoice::Message("".to_string()));
-                     }
-                     
-                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
-                         if let Some(text) = json["candidates"][0]["content"]["parts"][0]["text"].as_str() {
-                             return Ok(rig::streaming::RawStreamingChoice::Message(text.to_string()));
-                         }
-                     }
-                     // Fallback/Ignore empty
-                      Ok(rig::streaming::RawStreamingChoice::Message("".to_string()))
-                 },
-                 Err(e) => Err(CompletionError::ProviderError(e.to_string()))
-             }
+            match event_res {
+                Ok(event) => {
+                    let data = event.data;
+                    if data == "[DONE]" {
+                        // Rig expects a Final variant to close stream properly, but empty message works too
+                        return Ok(rig::streaming::RawStreamingChoice::Message("".to_string()));
+                    }
+
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data)
+                        && let Some(text) =
+                            json["candidates"][0]["content"]["parts"][0]["text"].as_str()
+                    {
+                        return Ok(rig::streaming::RawStreamingChoice::Message(
+                            text.to_string(),
+                        ));
+                    }
+                    // Fallback/Ignore empty
+                    Ok(rig::streaming::RawStreamingChoice::Message("".to_string()))
+                }
+                Err(e) => Err(CompletionError::ProviderError(e.to_string())),
+            }
         });
-        
+
         Ok(StreamingCompletionResponse::stream(Box::pin(mapped_stream)))
     }
 }
@@ -140,44 +155,50 @@ impl From<String> for GoogleStreamingResponse {
 // Helper to build Gemini JSON request from Rig CompletionRequest
 fn build_gemini_request(request: &CompletionRequest) -> serde_json::Value {
     // Construct Gemini "contents" from chat history
-    let contents: Vec<serde_json::Value> = request.chat_history.iter().map(|msg| {
-        let role = match msg {
-            rig::completion::Message::User { .. } => "user",
-            rig::completion::Message::Assistant { .. } => "model",
-        };
-        
-        let parts = match msg {
-             rig::completion::Message::User { content } => {
-                 content.iter().map(|c| match c {
-                     UserContent::Text(t) => json!({"text": t.text}),
-                     _ => json!({"text": ""}) // Image not supported in this basic impl
-                 }).collect::<Vec<_>>()
-             },
-             rig::completion::Message::Assistant { content, .. } => {
-                 content.iter().map(|c| match c {
-                     AssistantContent::Text(t) => json!({"text": t.text}),
-                     _ => json!({"text": ""})
-                 }).collect::<Vec<_>>()
-             }
-        };
-        
-        json!({
-            "role": role,
-            "parts": parts
+    let contents: Vec<serde_json::Value> = request
+        .chat_history
+        .iter()
+        .map(|msg| {
+            let role = match msg {
+                rig::completion::Message::User { .. } => "user",
+                rig::completion::Message::Assistant { .. } => "model",
+            };
+
+            let parts = match msg {
+                rig::completion::Message::User { content } => {
+                    content
+                        .iter()
+                        .map(|c| match c {
+                            UserContent::Text(t) => json!({"text": t.text}),
+                            _ => json!({"text": ""}), // Image not supported in this basic impl
+                        })
+                        .collect::<Vec<_>>()
+                }
+                rig::completion::Message::Assistant { content, .. } => content
+                    .iter()
+                    .map(|c| match c {
+                        AssistantContent::Text(t) => json!({"text": t.text}),
+                        _ => json!({"text": ""}),
+                    })
+                    .collect::<Vec<_>>(),
+            };
+
+            json!({
+                "role": role,
+                "parts": parts
+            })
         })
-    }).collect();
+        .collect();
 
     // Add system instruction if preamble exists
     let final_contents = contents;
-    
+
     // Note: Gemini API puts system instruction adjacent to contents, not inside.
-    let system_instruction = if let Some(preamble) = &request.preamble {
-        Some(json!({
+    let system_instruction = request.preamble.as_ref().map(|preamble| {
+        json!({
             "parts": [{ "text": preamble }]
-        }))
-    } else {
-        None
-    };
+        })
+    });
 
     let generation_config = json!({
         "temperature": request.temperature.unwrap_or(0.7),

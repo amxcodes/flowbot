@@ -1,9 +1,11 @@
-use super::confirmation::{ConfirmationAdapter, ConfirmationRequest, ConfirmationResponse, RiskLevel};
-use anyhow::{anyhow, Result};
+use super::confirmation::{
+    ConfirmationAdapter, ConfirmationRequest, ConfirmationResponse, RiskLevel,
+};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use serde_json::json;
 use std::time::Duration;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 
 /// Telegram confirmation adapter using inline keyboard buttons
 pub struct TelegramConfirmationAdapter {
@@ -50,7 +52,7 @@ impl TelegramConfirmationAdapter {
 
     async fn send_inline_keyboard(&self, request: &ConfirmationRequest) -> Result<()> {
         let client = reqwest::Client::new();
-        
+
         let message_text = format!(
             "{} *Security Permission Request*\n\n\
             *Tool:* `{}`\n\
@@ -78,7 +80,7 @@ impl TelegramConfirmationAdapter {
         });
 
         let url = format!("https://api.telegram.org/bot{}/sendMessage", self.bot_token);
-        
+
         client
             .post(&url)
             .json(&json!({
@@ -97,7 +99,10 @@ impl TelegramConfirmationAdapter {
 
 #[async_trait]
 impl ConfirmationAdapter for TelegramConfirmationAdapter {
-    async fn request_confirmation(&self, request: &ConfirmationRequest) -> Result<ConfirmationResponse> {
+    async fn request_confirmation(
+        &self,
+        request: &ConfirmationRequest,
+    ) -> Result<ConfirmationResponse> {
         // Send inline keyboard to Telegram
         self.send_inline_keyboard(request).await?;
 
@@ -106,17 +111,17 @@ impl ConfirmationAdapter for TelegramConfirmationAdapter {
 
         // Wait for callback with timeout
         let timeout = request.timeout.unwrap_or(Duration::from_secs(300));
-        
+
         match tokio::time::timeout(timeout, async {
             // Wait for callback matching this request ID
             loop {
                 let mut rx = self.callback_rx.lock().await;
-                if let Some(callback) = rx.recv().await {
-                    if callback.request_id == request.id {
-                        return Ok(callback);
-                    }
-                    // Not our request, ignore
+                if let Some(callback) = rx.recv().await
+                    && callback.request_id == request.id
+                {
+                    return Ok(callback);
                 }
+                // Not our request, ignore
             }
         })
         .await

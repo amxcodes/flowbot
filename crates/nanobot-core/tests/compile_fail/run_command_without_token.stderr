@@ -1,0 +1,14 @@
+error[E0603]: function `run_command` is private
+ --> tests/compile_fail/run_command_without_token.rs:1:37
+  |
+1 | use nanobot_core::tools::commands::{run_command, RunCommandArgs};
+  |                                     ^^^^^^^^^^^ private function
+  |
+note: the function `run_command` is defined here
+ --> src/tools/commands.rs
+  |
+  | / pub(super) async fn run_command(
+  | |     _token: &super::ExecutorToken,
+  | |     args: RunCommandArgs,
+  | | ) -> Result<CommandOutput> {
+  | |__________________________^

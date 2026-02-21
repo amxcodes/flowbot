@@ -108,7 +108,12 @@ pub async fn run_isolated_agent_turn(
     let exec_progress_tx = progress_tx.clone();
     match tokio::time::timeout(
         timeout,
-        execute_agent_message(&session.id, &message, model_override, Some(exec_progress_tx)),
+        execute_agent_message(
+            &session.id,
+            &message,
+            model_override,
+            Some(exec_progress_tx),
+        ),
     )
     .await
     {
@@ -186,7 +191,6 @@ pub async fn execute_agent_message(
     use rig::OneOrMany;
     use rig::completion::message::{Text, UserContent};
     use rig::completion::{CompletionRequest, Message};
-    use rig::streaming::StreamedAssistantContent;
 
     // Load Config and Create Provider
     // This ensures we respect the global configuration (provider selection, API keys, limits)
@@ -228,15 +232,21 @@ pub async fn execute_agent_message(
 
     while let Some(chunk_res) = stream.next().await {
         match chunk_res {
-            Ok(StreamedAssistantContent::Text(text)) => {
-                response_text.push_str(&text.text);
+            Ok(crate::agent::ProviderChunk::TextDelta(text)) => {
+                response_text.push_str(&text);
                 if let Some(tx) = progress_tx.as_ref() {
-                    let _ = tx.send(text.text.clone());
+                    let _ = tx.send(text);
                 }
             }
-            Ok(_) => {} // Ignore other chunk types
+            Ok(crate::agent::ProviderChunk::ToolCall { .. }) => {
+                tracing::warn!("isolated agent received unexpected tool call chunk")
+            }
+            Ok(crate::agent::ProviderChunk::Error(err)) => {
+                tracing::warn!("isolated agent stream chunk error: {}", err);
+            }
+            Ok(crate::agent::ProviderChunk::End) => {}
             Err(e) => {
-                eprintln!("Stream chunk error: {}", e);
+                tracing::warn!("Stream chunk error: {}", e);
             }
         }
     }

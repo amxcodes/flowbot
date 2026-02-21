@@ -1,0 +1,246 @@
+name: Security Guards
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+      - "release-*"
+  pull_request:
+
+jobs:
+  guardrails:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Zero-warning check
+        run: RUSTFLAGS="-Dwarnings" cargo check -p nanobot-core
+
+      - name: Install promtool
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y prometheus
+
+      - name: Route policy guard
+        run: bash scripts/check_route_policy.sh
+
+      - name: Tool capability guard
+        run: python3 scripts/check_side_effect_token_gating.py
+
+      - name: Terminal event contract guard
+        run: python3 scripts/check_terminal_event_contract.py
+
+      - name: Gateway terminal frame guard
+        run: python3 scripts/check_gateway_terminal_frames.py
+
+      - name: Gateway atomic inflight guard
+        run: python3 scripts/check_gateway_atomic_inflight_admission.py
+
+      - name: Gateway multi-replica startup guard
+        run: python3 scripts/check_gateway_multi_replica_startup_guard.py
+
+      - name: WS timed send enforcement guard
+        run: python3 scripts/check_ws_timed_send_enforcement.py
+
+      - name: Provider contract matrix guard
+        run: python3 scripts/check_provider_contract_matrix.py
+
+      - name: Metric label policy guard
+        run: python3 scripts/check_metric_label_policy.py
+
+      - name: Prometheus format guard
+        run: bash scripts/check_prometheus_metrics.sh
+
+      - name: Unsafe env usage guard
+        run: bash scripts/check_unsafe_env_usage.sh
+
+      - name: Runtime limits doc guard
+        run: bash scripts/check_runtime_limits_docs.sh
+
+      - name: Async sync-call regression guard
+        run: bash scripts/check_no_std_fs_in_async_paths.sh
+
+      - name: Gateway sqlite boundary guard
+        run: bash scripts/check_no_sqlite_sync_in_gateway.sh
+
+      - name: Tool entrypoint sync-call guard
+        run: bash scripts/check_no_sync_tool_entrypoint.sh
+
+      - name: spawn_blocking boundary guard
+        run: bash scripts/check_no_spawn_blocking_without_semaphore.sh
+
+      - name: Run focused security tests
+        run: cargo test -p nanobot-core security::tests::production_refuses -- --nocapture
+
+      - name: Agent tool-loop e2e persistence test
+        run: cargo test -p nanobot-core e2e_mock_tool_loop_persists_once_per_request_id -- --nocapture
+
+      - name: Real provider OpenAI smoke (optional)
+        if: ${{ secrets.OPENAI_API_KEY != '' }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          NANOBOT_REAL_PROVIDER_SMOKE_REQUIRED: "1"
+        run: cargo test -p nanobot-core real_provider_openai_stream_smoke -- --nocapture
+
+      - name: Validate multi-replica startup checks (no redis feature)
+        run: cargo test -p nanobot-core multi_replica_runtime_readiness_requires_distributed_redis_feature -- --nocapture
+
+  redis-integration:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      NANOBOT_REDIS_URL: redis://127.0.0.1:6379/
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Wait for Redis service
+        run: |
+          python3 - <<'PY'
+          import socket
+          import time
+
+          host = "127.0.0.1"
+          port = 6379
+          deadline = time.time() + 30
+          while time.time() < deadline:
+              try:
+                  with socket.create_connection((host, port), timeout=1):
+                      print("Redis service reachable")
+                      raise SystemExit(0)
+              except OSError:
+                  time.sleep(1)
+
+          raise SystemExit("Redis service failed health check")
+          PY
+
+      - name: Redis two-node aggregate limiter test
+        run: cargo test -p nanobot-core --features distributed-redis redis_two_node_harness_enforces_aggregate_qps_with_clean_terminals -- --nocapture | tee redis-two-node.log
+
+      - name: Redis failure-mode open test
+        run: cargo test -p nanobot-core --features distributed-redis redis_failure_mode_open_allows_load_and_records_errors -- --nocapture | tee redis-fail-open.log
+
+      - name: Redis failure-mode closed test
+        run: cargo test -p nanobot-core --features distributed-redis redis_failure_mode_closed_sheds_load_fast_with_terminals -- --nocapture | tee redis-fail-closed.log
+
+      - name: Redis TTL drain smoke test
+        run: cargo test -p nanobot-core --features distributed-redis redis_ttl_drain_smoke_ci -- --ignored --nocapture | tee redis-ttl-drain.log
+
+      - name: Process rolling restart micro-smoke
+        run: cargo test -p nanobot-core --features distributed-redis,test-harness process_kill_rolling_restart_smoke_ci -- --nocapture | tee process-rolling-smoke.log
+
+      - name: Process rolling restart persistence micro-smoke
+        run: cargo test -p nanobot-core --features distributed-redis,test-harness process_kill_rolling_restart_persistence_smoke_ci -- --nocapture | tee process-rolling-persistence-smoke.log
+
+      - name: Validate multi-replica startup checks (redis feature)
+        run: cargo test -p nanobot-core --features distributed-redis multi_replica_runtime_readiness_fails_when_redis_unconfigured -- --nocapture
+
+      - name: Upload redis integration logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: redis-integration-logs
+          path: |
+            redis-two-node.log
+            redis-fail-open.log
+            redis-fail-closed.log
+            redis-ttl-drain.log
+            process-rolling-smoke.log
+            process-rolling-persistence-smoke.log
+
+  redis-chaos-integration:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      NANOBOT_REDIS_URL: redis://127.0.0.1:6379/
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Wait for Redis service
+        run: |
+          python3 - <<'PY'
+          import socket
+          import time
+
+          host = "127.0.0.1"
+          port = 6379
+          deadline = time.time() + 30
+          while time.time() < deadline:
+              try:
+                  with socket.create_connection((host, port), timeout=1):
+                      print("Redis service reachable")
+                      raise SystemExit(0)
+              except OSError:
+                  time.sleep(1)
+
+          raise SystemExit("Redis service failed health check")
+          PY
+
+      - name: Chaos slow fail-closed test
+        run: cargo test -p nanobot-core --features distributed-redis redis_chaos_slow_alive_fail_closed_sheds_with_bounded_latency -- --nocapture | tee redis-chaos-fail-closed.log
+
+      - name: Chaos slow fail-open test
+        run: cargo test -p nanobot-core --features distributed-redis redis_chaos_slow_alive_fail_open_allows_and_preserves_contract -- --nocapture | tee redis-chaos-fail-open.log
+
+      - name: Chaos flaky alternating test
+        run: cargo test -p nanobot-core --features distributed-redis redis_chaos_flaky_alternating_keeps_system_responsive -- --nocapture | tee redis-chaos-flaky.log
+
+      - name: Build combined chaos log
+        run: |
+          python3 - <<'PY'
+          files = [
+              "redis-chaos-fail-closed.log",
+              "redis-chaos-fail-open.log",
+              "redis-chaos-flaky.log",
+          ]
+          with open("redis-chaos-logs.txt", "w", encoding="utf-8") as out:
+              for name in files:
+                  with open(name, "r", encoding="utf-8") as src:
+                      out.write(src.read())
+                      out.write("\n")
+          print("Combined chaos logs written to redis-chaos-logs.txt")
+          PY
+
+      - name: Validate chaos summaries
+        run: python3 scripts/check_chaos_ci_summaries.py redis-chaos-logs.txt
+
+      - name: Upload redis chaos logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: redis-chaos-logs
+          path: |
+            redis-chaos-fail-closed.log
+            redis-chaos-fail-open.log
+            redis-chaos-flaky.log
+            redis-chaos-logs.txt

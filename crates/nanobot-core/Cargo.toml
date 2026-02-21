@@ -17,12 +17,18 @@ rig-core = { workspace = true }
 scraper = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = "0.9"
 pulldown-cmark = "0.12"
+dashmap = "6.1"
+lru = "0.16"
+sysinfo = "0.30"
+bytes = "1.5"
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 url = { workspace = true }
 urlencoding = { workspace = true }
 sha2 = { workspace = true }
+hmac = { workspace = true }
 base64 = { workspace = true }
 uuid = { workspace = true }
 rusqlite = { workspace = true }
@@ -30,9 +36,8 @@ rand = { workspace = true }
 once_cell = { workspace = true }
 inquire = { workspace = true }
 fastembed = { workspace = true }
-wasmtime = { workspace = true }
-wasmtime-wasi = "26.0"
 rhai = "1.19"
+lazy_static = "1.4"
 tokio-cron-scheduler = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -49,7 +54,6 @@ futures = { workspace = true }
 jsonwebtoken = { workspace = true }
 dialoguer = { workspace = true }
 console = { workspace = true }
-sysinfo = { workspace = true }
 indicatif = { workspace = true }
 colored = { workspace = true }
 toml = { workspace = true }
@@ -67,6 +71,9 @@ tracing-opentelemetry = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 opentelemetry-otlp = { workspace = true }
+tiktoken-rs = "0.5"
+md5 = "0.7"
+redis = { version = "0.27", optional = true, features = ["tokio-comp"] }
 
 # Slack integration
 slack-morphism = { workspace = true }
@@ -78,12 +85,19 @@ twilight-model = { workspace = true }
 twilight-util = { workspace = true }
 
 # Browser automation (optional)
-chromiumoxide = { version = "0.7", optional = true }
+chromiumoxide = { version = "0.8", optional = true }
 
 [features]
 default = []
 browser = ["dep:chromiumoxide"]
+distributed-redis = ["dep:redis"]
 examples = []
+test-harness = []
+
+[[bin]]
+name = "gateway_ws_node"
+path = "src/bin/gateway_ws_node.rs"
+required-features = ["test-harness"]
 
 [[example]]
 name = "validate_features"
@@ -108,3 +122,6 @@ required-features = ["examples"]
 [dev-dependencies]
 tempfile = "3.10"
 rusqlite = { workspace = true }
+tokio-tungstenite = "0.24"
+tower = "0.5"
+trybuild = "1"

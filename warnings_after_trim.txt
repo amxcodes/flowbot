@@ -1,0 +1,55 @@
+    Checking nanobot-core v0.1.0 (C:\Users\AMAN ANU\Desktop\amxcodes\nanobot\nanobot-rs-clean\crates\nanobot-core)
+warning: variant `Low` is never constructed
+  --> crates\nanobot-core\src\intelligent_router.rs:36:5
+   |
+32 | pub enum UrgencyLevel {
+   |          ------------ variant in this enum
+...
+36 |     Low,
+   |     ^^^
+   |
+   = note: `UrgencyLevel` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` on by default
+
+warning: fields `id`, `channel`, and `timestamp` are never read
+  --> crates\nanobot-core\src\intelligent_router.rs:42:9
+   |
+41 | pub struct IncomingMessage {
+   |            --------------- fields in this struct
+42 |     pub id: String,
+   |         ^^
+...
+45 |     pub channel: String,
+   |         ^^^^^^^
+46 |     pub timestamp: Instant,
+   |         ^^^^^^^^^
+   |
+   = note: `IncomingMessage` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `intent` and `confidence` are never read
+  --> crates\nanobot-core\src\intelligent_router.rs:60:9
+   |
+59 | pub struct RoutePlan {
+   |            --------- fields in this struct
+60 |     pub intent: IntentKind,
+   |         ^^^^^^
+...
+63 |     pub confidence: f32,
+   |         ^^^^^^^^^^
+   |
+   = note: `RoutePlan` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `agent` and `estimated_wait` are never read
+   --> crates\nanobot-core\src\intelligent_router.rs:141:9
+    |
+140 |     Routed {
+    |     ------ fields in this variant
+141 |         agent: String,
+    |         ^^^^^
+142 |         estimated_wait: Duration,
+    |         ^^^^^^^^^^^^^^
+    |
+    = note: `RoutingResult` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: `nanobot-core` (lib) generated 4 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.78s

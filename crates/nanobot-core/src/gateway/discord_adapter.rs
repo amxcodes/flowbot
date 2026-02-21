@@ -1,15 +1,15 @@
+use super::adapter::{ChannelAdapter, ChannelMessage, build_session_id};
+use super::registry::ChannelRegistry;
 /// Discord bot channel integration using Twilight (Production Grade)
 /// This implementation uses Twilight's Gateway and HTTP clients for robust handling
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use super::adapter::{build_session_id, ChannelAdapter, ChannelMessage};
-use super::registry::ChannelRegistry;
+use tokio::sync::mpsc;
 
 // Twilight Imports
-use twilight_gateway::{Shard, ShardId, Event, Intents};
+use twilight_gateway::{Event, EventTypeFlags, Intents, Shard, ShardId, StreamExt};
 use twilight_http::Client as HttpClient;
 use twilight_model::id::Id;
 use twilight_model::id::marker::ChannelMarker;
@@ -30,9 +30,17 @@ pub struct DiscordBot {
     registry: Arc<ChannelRegistry>,
     http_client: Arc<HttpClient>,
     confirmation_service: Arc<tokio::sync::Mutex<crate::tools::ConfirmationService>>,
-    confirmation_txs: Arc<tokio::sync::Mutex<std::collections::HashMap<u64, mpsc::Sender<crate::tools::ChannelConfirmationResponse>>>>,
+    confirmation_txs: Arc<
+        tokio::sync::Mutex<
+            std::collections::HashMap<u64, mpsc::Sender<crate::tools::ChannelConfirmationResponse>>,
+        >,
+    >,
     confirmation_ready: Arc<tokio::sync::Mutex<std::collections::HashSet<u64>>>,
-    pending_questions: Arc<tokio::sync::Mutex<std::collections::HashMap<String, crate::tools::question::QuestionPayload>>>,
+    pending_questions: Arc<
+        tokio::sync::Mutex<
+            std::collections::HashMap<String, crate::tools::question::QuestionPayload>,
+        >,
+    >,
     confirmation_outbound_tx: mpsc::Sender<ChannelMessage>,
 }
 
@@ -45,7 +53,7 @@ impl DiscordBot {
         confirmation_service: Arc<tokio::sync::Mutex<crate::tools::ConfirmationService>>,
     ) -> Self {
         let http_client = Arc::new(HttpClient::new(config.token.clone()));
-        
+
         Self {
             config,
             agent_tx,
@@ -73,11 +81,11 @@ impl DiscordBot {
             .collect();
 
         let chunk_count = chunks.len();
-        
+
         for chunk in chunks {
             self.http_client
                 .create_message(channel_id)
-                .content(&chunk)?
+                .content(&chunk)
                 .await?;
 
             // Rate limiting: wait 200ms between chunks (conservative)
@@ -90,7 +98,11 @@ impl DiscordBot {
     }
 
     /// Handle incoming Discord message
-    async fn handle_message(&self, msg: twilight_model::gateway::payload::incoming::MessageCreate) -> Result<()> {
+    async fn handle_message(
+        &self,
+        msg: twilight_model::gateway::payload::incoming::MessageCreate,
+    ) -> Result<()> {
+        let ingress_at = std::time::Instant::now();
         // Skip bot messages
         if msg.author.bot {
             return Ok(());
@@ -114,26 +126,43 @@ impl DiscordBot {
 
             if let Some(sender) = tx {
                 let _ = sender
-                    .send(crate::tools::ChannelConfirmationResponse { request_id, allowed })
+                    .send(crate::tools::ChannelConfirmationResponse {
+                        request_id,
+                        allowed,
+                    })
                     .await;
-                let _ = self.post_message(channel_id, "Confirmation received.").await;
+                let _ = self
+                    .post_message(channel_id, "Confirmation received.")
+                    .await;
             } else {
-                let _ = self.post_message(channel_id, "No pending confirmation.").await;
+                let _ = self
+                    .post_message(channel_id, "No pending confirmation.")
+                    .await;
             }
             return Ok(());
         }
-        
+
         // --- Pairing Authorization Logic ---
         match crate::pairing::is_authorized("discord", &user_id).await {
             Ok(authorized) => {
                 if !authorized {
                     match crate::pairing::get_user_code("discord", &user_id).await {
                         Ok(Some(code)) => {
-                            self.post_message(channel_id, &format!("⏳ Pending authorization. Code: **{}**", code)).await?;
+                            self.post_message(
+                                channel_id,
+                                &format!("⏳ Pending authorization. Code: **{}**", code),
+                            )
+                            .await?;
                         }
                         Ok(None) => {
                             let username = Some(msg.author.name.clone());
-                            if let Ok(code) = crate::pairing::create_pairing_request("discord", user_id.clone(), username).await {
+                            if let Ok(code) = crate::pairing::create_pairing_request(
+                                "discord",
+                                user_id.clone(),
+                                username,
+                            )
+                            .await
+                            {
                                 self.post_message(channel_id, &format!("🔐 Authorization Code: **{}**\n\nRun `nanobot pair discord {}` to authorize", code, code)).await?;
                             }
                         }
@@ -147,12 +176,63 @@ impl DiscordBot {
         // -----------------------------------
 
         if let Some(token) = text.strip_prefix("/set_admin_token ") {
-            let token = token.trim();
-            if token.is_empty() {
-                let _ = self.post_message(channel_id, "Token cannot be empty").await;
+            let parts: Vec<&str> = token.split_whitespace().collect();
+            let has_existing_admin = std::env::var("NANOBOT_ADMIN_TOKEN")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .is_some()
+                || crate::security::read_admin_token()
+                    .ok()
+                    .flatten()
+                    .map(|v| !v.trim().is_empty())
+                    .unwrap_or(false);
+
+            if !has_existing_admin {
+                let new_token = parts.first().map(|s| s.trim()).unwrap_or("");
+                if new_token.is_empty() {
+                    let _ = self
+                        .post_message(channel_id, "First-time setup: /set_admin_token <new_token>")
+                        .await;
+                    return Ok(());
+                }
+                if let Err(e) = crate::security::write_admin_token(new_token) {
+                    let _ = self
+                        .post_message(channel_id, &format!("Failed to save token: {}", e))
+                        .await;
+                    return Ok(());
+                }
+                let _ = self
+                    .post_message(channel_id, "Admin token saved (first-time setup)")
+                    .await;
                 return Ok(());
             }
-            if let Err(e) = crate::security::write_admin_token(token) {
+
+            if parts.len() < 2 {
+                let _ = self
+                    .post_message(
+                        channel_id,
+                        "Usage: /set_admin_token <current_token_or_primary_password> <new_token>. Example: /set_admin_token mypassword newtoken123",
+                    )
+                    .await;
+                return Ok(());
+            }
+            let current = parts[0].trim();
+            let new_token = parts[1].trim();
+            if new_token.is_empty() {
+                let _ = self
+                    .post_message(channel_id, "New token cannot be empty")
+                    .await;
+                return Ok(());
+            }
+
+            if !crate::security::verify_admin_rotation_secret(current) {
+                let _ = self
+                    .post_message(channel_id, "Current token/password is invalid")
+                    .await;
+                return Ok(());
+            }
+
+            if let Err(e) = crate::security::write_admin_token(new_token) {
                 let _ = self
                     .post_message(channel_id, &format!("Failed to save token: {}", e))
                     .await;
@@ -162,7 +242,9 @@ impl DiscordBot {
             return Ok(());
         }
 
-        match crate::gateway::onboarding::process_onboarding_message("discord", &user_id, &text).await {
+        match crate::gateway::onboarding::process_onboarding_message("discord", &user_id, &text)
+            .await
+        {
             Ok(crate::gateway::onboarding::OnboardingOutcome::ReplyOnly(reply)) => {
                 let _ = self.post_message(channel_id, &reply).await;
                 return Ok(());
@@ -171,6 +253,21 @@ impl DiscordBot {
             Err(e) => {
                 let _ = self
                     .post_message(channel_id, &format!("Setup error: {}", e))
+                    .await;
+                return Ok(());
+            }
+        }
+
+        let skill_scope = format!("discord:{}:{}", channel_id.get(), user_id);
+        match crate::gateway::skill_chat::handle_skill_slash_command(&skill_scope, &text).await {
+            Ok(Some(reply)) => {
+                let _ = self.post_message(channel_id, &reply).await;
+                return Ok(());
+            }
+            Ok(None) => {}
+            Err(e) => {
+                let _ = self
+                    .post_message(channel_id, &format!("Skill command error: {}", e))
                     .await;
                 return Ok(());
             }
@@ -210,12 +307,15 @@ impl DiscordBot {
         let agent_msg = crate::agent::AgentMessage {
             session_id: session_id.clone(),
             tenant_id: session_id.clone(),
+            request_id: uuid::Uuid::new_v4().to_string(),
             content: text,
             response_tx,
+            ingress_at,
         };
 
         if self.agent_tx.send(agent_msg).await.is_err() {
-            self.post_message(channel_id, "❌ Agent service unavailable").await?;
+            self.post_message(channel_id, "❌ Agent service unavailable")
+                .await?;
             return Ok(());
         }
 
@@ -272,11 +372,11 @@ impl DiscordBot {
                 let raw_id = msg.user_id.replace("discord:", "");
                 if let Ok(channel_id_u64) = raw_id.parse::<u64>() {
                     let channel_id = Id::<ChannelMarker>::new(channel_id_u64);
-                    
+
                     // Simple send (could be improved with splitting)
-                    let _ = http_client.create_message(channel_id)
+                    let _ = http_client
+                        .create_message(channel_id)
                         .content(&msg.content)
-                        .unwrap()
                         .await;
                 }
             }
@@ -286,14 +386,15 @@ impl DiscordBot {
 
         // 4. Gateway Event Loop
         loop {
-            let event = match shard.next_event().await {
-                Ok(event) => event,
-                Err(source) => {
+            let event = match shard.next_event(EventTypeFlags::all()).await {
+                Some(Ok(event)) => event,
+                Some(Err(source)) => {
                     tracing::warn!("Gateway error: {:?}", source);
-                    if source.is_fatal() {
-                        break;
-                    }
                     continue;
+                }
+                None => {
+                    tracing::warn!("Discord gateway stream ended");
+                    break;
                 }
             };
 
@@ -364,7 +465,7 @@ impl ChannelAdapter for DiscordBot {
             let channel_id = Id::<ChannelMarker>::new(channel_id_u64);
             self.post_message(channel_id, content).await
         } else {
-             Err(anyhow::anyhow!("Invalid channel ID format"))
+            Err(anyhow::anyhow!("Invalid channel ID format"))
         }
     }
 

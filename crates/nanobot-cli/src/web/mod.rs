@@ -1,16 +1,17 @@
+use anyhow::Result;
 use axum::{
+    Json, Router,
     extract::State,
     http::StatusCode,
-    response::{IntoResponse, Html},
+    response::{Html, IntoResponse},
     routing::{get, post},
-    Json, Router,
 };
-use serde::{Deserialize, Serialize};
-use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation};
 use chrono::{Duration, Utc};
+use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use anyhow::Result;
 
 use nanobot_core::agent::{AgentMessage, StreamChunk};
 
@@ -20,7 +21,9 @@ pub struct WebState {
     pub agent_tx: tokio::sync::mpsc::Sender<AgentMessage>,
     pub auth_secret: Vec<u8>,
     pub session_ids: Arc<Mutex<std::collections::HashMap<String, String>>>,
-    pub pending_questions: Arc<Mutex<std::collections::HashMap<String, nanobot_core::tools::question::QuestionPayload>>>,
+    pub pending_questions: Arc<
+        Mutex<std::collections::HashMap<String, nanobot_core::tools::question::QuestionPayload>>,
+    >,
 }
 
 impl WebState {
@@ -74,11 +77,13 @@ struct WebClaims {
 
 #[derive(Deserialize)]
 pub struct AdminTokenRequest {
+    current: Option<String>,
     token: String,
 }
 
 async fn serve_login() -> Html<&'static str> {
-    Html(r#"
+    Html(
+        r#"
 <!DOCTYPE html>
 <html>
 <head>
@@ -113,11 +118,13 @@ async fn serve_login() -> Html<&'static str> {
     </script>
 </body>
 </html>
-    "#)
+    "#,
+    )
 }
 
 async fn serve_index() -> Html<&'static str> {
-    Html(r#"
+    Html(
+        r#"
 <!DOCTYPE html>
 <html>
 <head>
@@ -140,6 +147,7 @@ async fn serve_index() -> Html<&'static str> {
     <details>
         <summary>Admin Token</summary>
         <div style="margin: 10px 0;">
+            <input id="currentAdminSecret" type="password" placeholder="Current admin token or primary password" />
             <input id="adminToken" type="password" placeholder="Set admin token" />
             <button onclick="setAdminToken()">Save Token</button>
         </div>
@@ -177,6 +185,34 @@ async fn serve_index() -> Html<&'static str> {
             const data = await response.json();
             appendMessage('assistant', data.response);
         }
+
+        async function setAdminToken() {
+            const current = document.getElementById('currentAdminSecret').value || null;
+            const token = document.getElementById('adminToken').value;
+            if (!token) {
+                alert('Please enter new admin token');
+                return;
+            }
+
+            const res = await fetch('/api/admin/token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ current, token })
+            });
+
+            if (res.ok) {
+                alert('Admin token updated');
+                document.getElementById('adminToken').value = '';
+                return;
+            }
+
+            if (res.status === 401) {
+                alert('Current token/password invalid (or missing)');
+            } else {
+                alert('Failed to update admin token');
+            }
+        }
+
         function appendMessage(role, text) {
             const chat = document.getElementById('chat');
             const div = document.createElement('div');
@@ -191,23 +227,33 @@ async fn serve_index() -> Html<&'static str> {
     </script>
 </body>
 </html>
-    "#)
+    "#,
+    )
 }
 
 async fn login_handler(
     State(state): State<WebState>,
     Json(req): Json<LoginRequest>,
 ) -> impl IntoResponse {
-    let expected_pass = std::env::var("NANOBOT_WEB_PASSWORD")
-        .ok()
-        .or_else(|| nanobot_core::security::read_web_password().ok().flatten())
-        .unwrap_or_else(|| "admin".to_string());
+    let Some(expected_pass) = nanobot_core::security::read_primary_password() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "ok": false,
+                "error": "Web password not configured. Run setup and set a primary password."
+            })),
+        )
+            .into_response();
+    };
 
-    if req.password == expected_pass {
+    if nanobot_core::security::secure_eq(&req.password, &expected_pass) {
         let tenant_id = req.username;
 
         let exp = (Utc::now() + Duration::hours(24)).timestamp() as usize;
-        let claims = WebClaims { sub: tenant_id, exp };
+        let claims = WebClaims {
+            sub: tenant_id,
+            exp,
+        };
         let token = match jsonwebtoken::encode(
             &Header::default(),
             &claims,
@@ -218,8 +264,12 @@ async fn login_handler(
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     axum::http::HeaderMap::new(),
-                    Json(LoginResponse { success: false, token: None }),
-                );
+                    Json(LoginResponse {
+                        success: false,
+                        token: None,
+                    }),
+                )
+                    .into_response();
             }
         };
 
@@ -241,6 +291,7 @@ async fn login_handler(
                 token: None,
             }),
         )
+            .into_response()
     } else {
         (
             StatusCode::UNAUTHORIZED,
@@ -250,6 +301,7 @@ async fn login_handler(
                 token: None,
             }),
         )
+            .into_response()
     }
 }
 
@@ -258,8 +310,13 @@ async fn chat_handler(
     headers: axum::http::HeaderMap,
     Json(req): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, StatusCode> {
+    let ingress_at = std::time::Instant::now();
     // Extract tenant_id from cookie
-    let cookie_header = headers.get("cookie").ok_or(StatusCode::UNAUTHORIZED)?.to_str().map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let cookie_header = headers
+        .get("cookie")
+        .ok_or(StatusCode::UNAUTHORIZED)?
+        .to_str()
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
     let token = cookie_header
         .split(';')
         .find_map(|p| {
@@ -311,20 +368,22 @@ async fn chat_handler(
 
     // Create channel for agent responses
     let (response_tx, mut response_rx) = tokio::sync::mpsc::channel::<StreamChunk>(100);
-    
+
     // Send message to agent
     let agent_msg = AgentMessage {
         session_id: session_id.clone(),
         tenant_id, // Use validated tenant_id
+        request_id: uuid::Uuid::new_v4().to_string(),
         content: user_message,
         response_tx,
+        ingress_at,
     };
-    
+
     if let Err(e) = state.agent_tx.send(agent_msg).await {
         eprintln!("Failed to send to agent: {}", e);
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    
+
     // Collect the full response from the stream
     let mut full_response = String::new();
     while let Some(chunk) = response_rx.recv().await {
@@ -336,7 +395,9 @@ async fn chat_handler(
                 full_response.push_str(&format!("\n[Calling tool: {}]\n", tool_name));
             }
             StreamChunk::ToolResult(result) => {
-                if let Some(payload) = nanobot_core::tools::question::parse_question_payload(&result) {
+                if let Some(payload) =
+                    nanobot_core::tools::question::parse_question_payload(&result)
+                {
                     let prompt = nanobot_core::tools::question::format_question_prompt(&payload);
                     {
                         let mut pending_map = state.pending_questions.lock().await;
@@ -356,19 +417,21 @@ async fn chat_handler(
                 // Let's append it but marked.
                 full_response.push_str(&format!("\n<think>{}</think>\n", text));
             }
-            StreamChunk::Done => break,
+            StreamChunk::Done { .. } => break,
         }
     }
-    
+
     // Store in session history
     let mut sessions = state.sessions.lock().await;
-    sessions.entry(session_id.clone())
+    sessions
+        .entry(session_id.clone())
         .or_insert_with(Vec::new)
         .push(req.message.clone());
-    sessions.entry(session_id.clone())
+    sessions
+        .entry(session_id.clone())
         .or_insert_with(Vec::new)
         .push(full_response.clone());
-    
+
     Ok(Json(ChatResponse {
         response: full_response,
         session_id,
@@ -413,6 +476,15 @@ async fn admin_token_handler(
         return Err(StatusCode::BAD_REQUEST);
     }
 
+    if nanobot_core::security::read_admin_auth_secret().is_some() {
+        let Some(current) = req.current.as_deref() else {
+            return Err(StatusCode::UNAUTHORIZED);
+        };
+        if !nanobot_core::security::verify_admin_rotation_secret(current) {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+    }
+
     nanobot_core::security::write_admin_token(req.token.trim())
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -438,15 +510,18 @@ pub fn create_router(state: WebState) -> Router {
         .with_state(state)
 }
 
-pub async fn run_server(port: u16, agent_tx: tokio::sync::mpsc::Sender<AgentMessage>) -> Result<()> {
+pub async fn run_server(
+    port: u16,
+    agent_tx: tokio::sync::mpsc::Sender<AgentMessage>,
+) -> Result<()> {
     let state = WebState::new(agent_tx);
     let app = create_router(state);
-    
+
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     println!("🌐 WebChat UI available at http://localhost:{}", port);
-    
+
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
-    
+
     Ok(())
 }

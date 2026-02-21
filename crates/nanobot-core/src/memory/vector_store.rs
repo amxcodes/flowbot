@@ -1,11 +1,11 @@
 use super::embedding_provider::EmbeddingProvider;
 use anyhow::{Result, anyhow};
-use rusqlite::{Connection, params, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::cmp::Ordering;
 use tracing::{info, instrument};
 
 // Scoring helpers were removed; streaming sort is used directly.
@@ -32,24 +32,28 @@ pub struct MemoryManager {
 }
 
 impl MemoryManager {
-    pub fn new(db_path: PathBuf, provider: EmbeddingProvider) -> Self {
+    pub fn new(db_path: PathBuf, provider: EmbeddingProvider) -> Result<Self> {
         if let Some(parent) = db_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
 
-        let conn = Connection::open(&db_path).expect("Failed to open memory DB");
+        let conn = Connection::open(&db_path)
+            .map_err(|e| anyhow!("Failed to open memory DB at {}: {}", db_path.display(), e))?;
 
         let manager = Self {
             provider,
             conn: Arc::new(Mutex::new(conn)),
         };
 
-        manager.ensure_schema().expect("Failed to initialize memory schema");
-        manager
+        manager.ensure_schema()?;
+        Ok(manager)
     }
 
     fn ensure_schema(&self) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| anyhow!("Database lock poisoned: {}", e))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow!("Database lock poisoned: {}", e))?;
 
         conn.execute(
             "CREATE TABLE IF NOT EXISTS documents (
@@ -70,8 +74,14 @@ impl MemoryManager {
             [],
         )?;
 
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_path_tenant ON documents(path, tenant_id)", [])?;
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_tenant ON documents(tenant_id)", [])?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_path_tenant ON documents(path, tenant_id)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tenant ON documents(tenant_id)",
+            [],
+        )?;
 
         Ok(())
     }
@@ -94,7 +104,8 @@ impl MemoryManager {
         let tenant_id = tenant_id.ok_or_else(|| anyhow::anyhow!("tenant_id is required"))?;
         let embeddings = self.provider.embed(vec![content]).await?;
         let vector = embeddings[0].clone();
-        self.add_document_with_vector(content, metadata, &vector, tenant_id).await
+        self.add_document_with_vector(content, metadata, &vector, tenant_id)
+            .await
     }
 
     async fn add_document_with_vector(
@@ -115,20 +126,22 @@ impl MemoryManager {
         let tid = tenant_id.to_string();
 
         tokio::task::spawn_blocking(move || {
-            let mut conn = conn.lock().unwrap();
+            let mut conn = conn
+                .lock()
+                .map_err(|e| anyhow!("Memory DB lock poisoned: {}", e))?;
             let tx = conn.transaction()?;
-            
+
             tx.execute(
                 "INSERT INTO documents (id, path, content, metadata, vector, tenant_id, created_at, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![id, path, content, metadata_json, vector_blob, tid, now, now],
             )?;
-            
+
             tx.execute(
                 "INSERT INTO documents_fts (content, path, tenant_id) VALUES (?1, ?2, ?3)",
                 params![content, path, tid],
             )?;
-            
+
             tx.commit()?;
             Ok::<_, anyhow::Error>(())
         }).await??;
@@ -143,7 +156,9 @@ impl MemoryManager {
         batch_size: Option<usize>,
     ) -> Result<usize> {
         let tenant_id = tenant_id.ok_or_else(|| anyhow::anyhow!("tenant_id is required"))?;
-        if documents.is_empty() { return Ok(0); }
+        if documents.is_empty() {
+            return Ok(0);
+        }
         let batch_size = batch_size.unwrap_or(20);
         let mut added = 0;
 
@@ -151,7 +166,8 @@ impl MemoryManager {
             let contents: Vec<&str> = chunk.iter().map(|(c, _)| c.as_str()).collect();
             let embeddings = self.provider.embed(contents).await?;
             for (i, (content, metadata)) in chunk.iter().enumerate() {
-                self.add_document_with_vector(content, metadata.clone(), &embeddings[i], tenant_id).await?;
+                self.add_document_with_vector(content, metadata.clone(), &embeddings[i], tenant_id)
+                    .await?;
                 added += 1;
             }
         }
@@ -159,20 +175,35 @@ impl MemoryManager {
     }
 
     pub fn remove_document_by_path(&self, path: &str, tenant_id: Option<&str>) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow!("Memory DB lock poisoned: {}", e))?;
         let tid = tenant_id.ok_or_else(|| anyhow::anyhow!("tenant_id is required"))?;
-        conn.execute("DELETE FROM documents WHERE path = ?1 AND tenant_id = ?2", params![path, tid])?;
-        conn.execute("DELETE FROM documents_fts WHERE path = ?1 AND tenant_id = ?2", params![path, tid])?;
+        conn.execute(
+            "DELETE FROM documents WHERE path = ?1 AND tenant_id = ?2",
+            params![path, tid],
+        )?;
+        conn.execute(
+            "DELETE FROM documents_fts WHERE path = ?1 AND tenant_id = ?2",
+            params![path, tid],
+        )?;
         Ok(())
     }
-    
-    pub async fn update_document(&self, path: &str, content: &str, tenant_id: Option<&str>) -> Result<()> {
-         let tenant_id = tenant_id.ok_or_else(|| anyhow::anyhow!("tenant_id is required"))?;
-         let embeddings = self.provider.embed(vec![content]).await?;
-         let vector = embeddings[0].clone();
-         let mut metadata = HashMap::new();
-         metadata.insert("path".to_string(), path.to_string());
-         self.update_document_with_vector(path, content, metadata, &vector, tenant_id).await
+
+    pub async fn update_document(
+        &self,
+        path: &str,
+        content: &str,
+        tenant_id: Option<&str>,
+    ) -> Result<()> {
+        let tenant_id = tenant_id.ok_or_else(|| anyhow::anyhow!("tenant_id is required"))?;
+        let embeddings = self.provider.embed(vec![content]).await?;
+        let vector = embeddings[0].clone();
+        let mut metadata = HashMap::new();
+        metadata.insert("path".to_string(), path.to_string());
+        self.update_document_with_vector(path, content, metadata, &vector, tenant_id)
+            .await
     }
 
     async fn update_document_with_vector(
@@ -193,7 +224,9 @@ impl MemoryManager {
         let tid = tenant_id.to_string();
 
         tokio::task::spawn_blocking(move || {
-            let mut conn = conn.lock().unwrap();
+            let mut conn = conn
+                .lock()
+                .map_err(|e| anyhow!("Memory DB lock poisoned: {}", e))?;
             let tx = conn.transaction()?;
 
             tx.execute(
@@ -224,44 +257,143 @@ impl MemoryManager {
     }
 
     #[instrument(skip(self))]
-    pub async fn search(&self, query: &str, limit: usize, tenant_id: Option<&str>) -> Result<Vec<(f32, VectorEntry)>> {
+    pub async fn search(
+        &self,
+        query: &str,
+        limit: usize,
+        tenant_id: Option<&str>,
+    ) -> Result<Vec<(f32, VectorEntry)>> {
         let tenant_id = tenant_id.ok_or_else(|| anyhow::anyhow!("tenant_id is required"))?;
-        
+        let vector_scan_limit = vector_scan_limit();
+
         // 1. Embed Query
         let query_embeddings = self.provider.embed(vec![query]).await?;
         let query_vec = query_embeddings[0].clone();
 
+        // 2. Build an approximate candidate set when corpus is large.
+        let conn_for_candidates = self.conn.clone();
+        let tid_for_candidates = tenant_id.to_string();
+        let query_for_candidates = query.to_string();
+        let candidate_ids: Option<Vec<String>> = tokio::task::spawn_blocking(move || {
+            let conn = conn_for_candidates
+                .lock()
+                .map_err(|e| anyhow!("Memory DB lock poisoned: {}", e))?;
+
+            let total: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM documents WHERE tenant_id = ?1",
+                params![tid_for_candidates],
+                |row| row.get(0),
+            )?;
+
+            if (total as usize) <= vector_scan_limit {
+                return Ok::<Option<Vec<String>>, anyhow::Error>(None);
+            }
+
+            let mut ids: Vec<String> = Vec::new();
+            if !query_for_candidates.trim().is_empty() {
+                let escaped = query_for_candidates.replace('"', "");
+                let mut stmt = conn.prepare(
+                    "SELECT d.id
+                     FROM documents_fts f
+                     JOIN documents d ON d.path = f.path AND d.tenant_id = f.tenant_id
+                     WHERE f.documents_fts MATCH ?1 AND f.tenant_id = ?2
+                     ORDER BY rank
+                     LIMIT ?3",
+                )?;
+
+                let fts_ids: Vec<String> = stmt
+                    .query_map(
+                        params![
+                            format!("\"{}\"", escaped),
+                            tid_for_candidates,
+                            vector_scan_limit as i64
+                        ],
+                        |row| row.get(0),
+                    )?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                ids.extend(fts_ids);
+            }
+
+            let mut recent_stmt = conn.prepare(
+                "SELECT id FROM documents WHERE tenant_id = ?1 ORDER BY updated_at DESC LIMIT ?2",
+            )?;
+            let recent_ids: Vec<String> = recent_stmt
+                .query_map(
+                    params![tid_for_candidates, vector_scan_limit as i64],
+                    |row| row.get(0),
+                )?
+                .filter_map(|r| r.ok())
+                .collect();
+            ids.extend(recent_ids);
+
+            ids.sort();
+            ids.dedup();
+            ids.truncate(vector_scan_limit);
+
+            if ids.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(ids))
+            }
+        })
+        .await??;
+
         let conn_arc = self.conn.clone();
         let tid = tenant_id.to_string();
+        let candidate_ids_for_scan = candidate_ids.clone();
 
-        // 2. Vector Search (Streaming Scan)
+        // 3. Vector Search (full scan or approximate candidate scan)
         let vector_scores: HashMap<String, f32> = tokio::task::spawn_blocking(move || {
-            let conn = conn_arc.lock().unwrap();
-            // Read ID and Vector only
-            let mut stmt = conn.prepare("SELECT id, vector FROM documents WHERE tenant_id = ?1")?;
-            
+            let conn = conn_arc
+                .lock()
+                .map_err(|e| anyhow!("Memory DB lock poisoned: {}", e))?;
             let mut scores = HashMap::new();
-            let rows = stmt.query_map(params![tid], |row| {
-                let id: String = row.get(0)?;
-                let vec_blob: Vec<u8> = row.get(1)?;
-                Ok((id, vec_blob))
-            })?;
 
-            for res in rows {
-                if let Ok((id, blob)) = res {
-                    if let Ok(vec) = serde_json::from_slice::<Vec<f32>>(&blob) {
-                         let score = cosine_similarity(&query_vec, &vec);
-                         scores.insert(id, score);
+            if let Some(candidates) = candidate_ids_for_scan {
+                let mut stmt = conn
+                    .prepare("SELECT id, vector FROM documents WHERE tenant_id = ?1 AND id = ?2")?;
+                for id in candidates {
+                    let row = stmt
+                        .query_row(params![tid, id], |row| {
+                            let doc_id: String = row.get(0)?;
+                            let vec_blob: Vec<u8> = row.get(1)?;
+                            Ok((doc_id, vec_blob))
+                        })
+                        .optional()?;
+
+                    if let Some((doc_id, blob)) = row
+                        && let Ok(vec) = serde_json::from_slice::<Vec<f32>>(&blob)
+                    {
+                        let score = cosine_similarity(&query_vec, &vec);
+                        scores.insert(doc_id, score);
+                    }
+                }
+            } else {
+                let mut stmt =
+                    conn.prepare("SELECT id, vector FROM documents WHERE tenant_id = ?1")?;
+                let rows = stmt.query_map(params![tid], |row| {
+                    let id: String = row.get(0)?;
+                    let vec_blob: Vec<u8> = row.get(1)?;
+                    Ok((id, vec_blob))
+                })?;
+
+                for res in rows {
+                    if let Ok((id, blob)) = res
+                        && let Ok(vec) = serde_json::from_slice::<Vec<f32>>(&blob)
+                    {
+                        let score = cosine_similarity(&query_vec, &vec);
+                        scores.insert(id, score);
                     }
                 }
             }
             Ok::<_, anyhow::Error>(scores)
-        }).await??;
+        })
+        .await??;
 
         // Get Top K Vector Results for RRF
-        let mut top_vector_results: Vec<(String, f32)> = vector_scores.iter()
-            .map(|(k, v)| (k.clone(), *v))
-            .collect();
+        let mut top_vector_results: Vec<(String, f32)> =
+            vector_scores.iter().map(|(k, v)| (k.clone(), *v)).collect();
         top_vector_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
         top_vector_results.truncate(limit * 2);
 
@@ -272,12 +404,14 @@ impl MemoryManager {
         let limit_fts = limit * 2;
 
         let fts_ids: Vec<String> = tokio::task::spawn_blocking(move || {
-            let conn = conn_arc.lock().unwrap();
+            let conn = conn_arc
+                .lock()
+                .map_err(|e| anyhow!("Memory DB lock poisoned: {}", e))?;
             let mut stmt = conn.prepare(
                 "SELECT path FROM documents_fts WHERE documents_fts MATCH ?1 AND tenant_id = ?2 ORDER BY rank LIMIT ?3"
             )?;
             let paths: Vec<String> = stmt.query_map(params![format!("\"{}\"", q_str.replace("\"", "")), tid_str, limit_fts as i64], |row| {
-                Ok(row.get::<_, String>(0)?)
+                row.get::<_, String>(0)
             })?.filter_map(|r| r.ok()).collect();
 
             let mut ids = Vec::new();
@@ -306,30 +440,44 @@ impl MemoryManager {
 
         // 5. Hydrate
         let ids: Vec<String> = rrf_scores.keys().cloned().collect();
-        if ids.is_empty() { return Ok(Vec::new()); }
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
 
         let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = format!("SELECT id, content, metadata, vector, tenant_id FROM documents WHERE id IN ({})", placeholders);
+        let sql = format!(
+            "SELECT id, content, metadata, vector, tenant_id FROM documents WHERE id IN ({})",
+            placeholders
+        );
         let params_vec = ids.clone();
         let conn_arc = self.conn.clone();
 
         let documents: Vec<VectorEntry> = tokio::task::spawn_blocking(move || {
-            let conn = conn_arc.lock().unwrap();
+            let conn = conn_arc
+                .lock()
+                .map_err(|e| anyhow!("Memory DB lock poisoned: {}", e))?;
             let mut stmt = conn.prepare(&sql)?;
-            let docs = stmt.query_map(rusqlite::params_from_iter(params_vec.iter()), |row| {
-                 let id: String = row.get(0)?;
-                 let content: String = row.get(1)?;
-                 let meta_str: String = row.get(2)?;
-                 let vec_blob: Vec<u8> = row.get(3)?;
-                 let tid: String = row.get(4)?;
-                 let vec: Vec<f32> = serde_json::from_slice(&vec_blob).unwrap_or_default();
-                 Ok(VectorEntry {
-                     id, content, metadata: serde_json::from_str(&meta_str).unwrap_or_default(),
-                     vector: vec, tenant_id: tid
-                 })
-            })?.filter_map(|r| r.ok()).collect();
+            let docs = stmt
+                .query_map(rusqlite::params_from_iter(params_vec.iter()), |row| {
+                    let id: String = row.get(0)?;
+                    let content: String = row.get(1)?;
+                    let meta_str: String = row.get(2)?;
+                    let vec_blob: Vec<u8> = row.get(3)?;
+                    let tid: String = row.get(4)?;
+                    let vec: Vec<f32> = serde_json::from_slice(&vec_blob).unwrap_or_default();
+                    Ok(VectorEntry {
+                        id,
+                        content,
+                        metadata: serde_json::from_str(&meta_str).unwrap_or_default(),
+                        vector: vec,
+                        tenant_id: tid,
+                    })
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
             Ok::<Vec<VectorEntry>, anyhow::Error>(docs)
-        }).await??;
+        })
+        .await??;
 
         let mut final_results = Vec::new();
         for doc in documents {
@@ -339,13 +487,16 @@ impl MemoryManager {
         }
         final_results.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
         final_results.truncate(limit);
-        
+
         Ok(final_results)
     }
 
     pub fn get_document(&self, id: &str, tenant_id: Option<&str>) -> Result<Option<VectorEntry>> {
         let tenant_id = tenant_id.ok_or_else(|| anyhow!("tenant_id is required"))?;
-        let conn = self.conn.lock().map_err(|e| anyhow!("Database lock poisoned: {}", e))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow!("Database lock poisoned: {}", e))?;
 
         let row = conn
             .query_row(
@@ -381,9 +532,21 @@ impl MemoryManager {
     }
 }
 
+fn vector_scan_limit() -> usize {
+    std::env::var("NANOBOT_VECTOR_MAX_SCAN")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(2000)
+}
+
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     let dot_product: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
     let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm_a == 0.0 || norm_b == 0.0 { 0.0 } else { dot_product / (norm_a * norm_b) }
+    if norm_a == 0.0 || norm_b == 0.0 {
+        0.0
+    } else {
+        dot_product / (norm_a * norm_b)
+    }
 }

@@ -1,0 +1,117 @@
+{
+  "status": "ok",
+  "requests": 100,
+  "concurrency": 50,
+  "connections_used": 100,
+  "connections_peak": 50,
+  "ok": 32,
+  "busy": 68,
+  "errors": 68,
+  "rejection_rate": 0.68,
+  "error_samples": [
+    "Server busy"
+  ],
+  "latency_ms": {
+    "p50": 1533.35,
+    "p95": 1731.64,
+    "p99": 1746.28,
+    "avg": 1476.04
+  },
+  "request_latency_ms": {
+    "p50": 1516.94,
+    "p95": 1715.52,
+    "p99": 1729.19,
+    "avg": 1460.14
+  },
+  "success_latency_ms": {
+    "p50": 1551.86,
+    "p95": 1745.91,
+    "p99": 1756.1,
+    "avg": 1409.5
+  },
+  "success_request_latency_ms": {
+    "p50": 1539.34,
+    "p95": 1728.87,
+    "p99": 1740.69,
+    "avg": 1393.73
+  },
+  "reject_latency_ms": {
+    "p50": 1531.43,
+    "p95": 1573.19,
+    "avg": 1507.35
+  },
+  "reject_request_latency_ms": {
+    "p50": 1514.96,
+    "p95": 1567.92,
+    "avg": 1491.39
+  },
+  "reject_signal_latency_ms": {
+    "p50": 1110.38,
+    "p95": 1365.26,
+    "avg": 1147.94
+  },
+  "reject_latency_by_reason_ms": {
+    "semaphore_timeout": {
+      "p50": 1514.96,
+      "p95": 1567.92,
+      "avg": 1491.39,
+      "count": 68
+    }
+  },
+  "metrics_delta": {
+    "llm_wait_total_seconds": 92.909568,
+    "llm_wait_samples": 100,
+    "llm_wait_avg_seconds": 0.929096,
+    "llm_dispatch_delay_total_seconds": 0.03287,
+    "llm_dispatch_delay_samples": 100,
+    "llm_dispatch_delay_avg_seconds": 0.000329,
+    "llm_reject_emit_delay_total_seconds": 0.001821,
+    "llm_reject_emit_delay_samples": 68,
+    "llm_reject_emit_delay_avg_seconds": 2.7e-05,
+    "llm_handler_to_reject_decision_total_seconds": 77.975857,
+    "llm_handler_to_reject_decision_samples": 68,
+    "llm_handler_to_reject_decision_avg_seconds": 1.146704,
+    "llm_service_total_seconds": 23.757532,
+    "llm_service_samples": 32,
+    "llm_service_avg_seconds": 0.742423,
+    "ws_send_wait_total_seconds": 0.001538,
+    "ws_send_wait_samples": 328,
+    "ws_send_wait_avg_seconds": 5e-06,
+    "gateway_ws_send_wait_total_seconds": 0.033824,
+    "gateway_ws_send_wait_samples": 328,
+    "gateway_ws_send_wait_avg_seconds": 0.000103,
+    "gateway_ws_recv_to_agent_send_total_seconds": 0.012808,
+    "gateway_ws_recv_to_agent_send_samples": 100,
+    "gateway_ws_recv_to_agent_send_avg_seconds": 0.000128,
+    "gateway_ws_agent_send_wait_total_seconds": 0.000705,
+    "gateway_ws_agent_send_wait_samples": 100,
+    "gateway_ws_agent_send_wait_avg_seconds": 7e-06,
+    "ws_send_inflight_peak": 5,
+    "ws_send_inflight_peak_delta": 0,
+    "ws_send_inflight_current": 0,
+    "llm_active_handlers_peak": 50,
+    "llm_active_handlers_peak_delta": 10,
+    "llm_active_handlers_current": 0,
+    "llm_in_service_peak": 8,
+    "llm_in_service_peak_delta": 0,
+    "llm_in_service_current": 0,
+    "llm_queue_depth_estimate": 0,
+    "llm_queue_depth_peak_estimate": 42,
+    "llm_rejected": 68,
+    "llm_rejected_by_reason": {
+      "semaphore_timeout": 68
+    },
+    "llm_timeout_path_counts": {
+      "deadline_expired": 68
+    },
+    "llm_rejection_rate": 0.68
+  },
+  "runtime_config": {
+    "llm_concurrency_limit": 8,
+    "llm_queue_wait_timeout_ms": 1000,
+    "mock_provider_enabled": true,
+    "bench_mode_enabled": true,
+    "bench_no_persistence": true,
+    "llm_timeout_remaining_ms_last": 159
+  }
+}

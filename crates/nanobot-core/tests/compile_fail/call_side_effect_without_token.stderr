@@ -1,0 +1,11 @@
+error[E0603]: module `filesystem` is private
+ --> tests/compile_fail/call_side_effect_without_token.rs:1:26
+  |
+1 | use nanobot_core::tools::filesystem::{edit_file, EditFileArgs};
+  |                          ^^^^^^^^^^ private module
+  |
+note: the module `filesystem` is defined here
+ --> src/tools/mod.rs
+  |
+  | mod filesystem;
+  | ^^^^^^^^^^^^^^

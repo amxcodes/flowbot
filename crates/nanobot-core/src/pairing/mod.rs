@@ -122,9 +122,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_pairing_flow() {
-        // This would need a test database instance
-        // For now, just a placeholder
-        // TODO: Implement with test database
-    }
+    #[ignore = "Requires isolated test database wiring"]
+    async fn test_pairing_flow() {}
 }

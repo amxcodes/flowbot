@@ -1,0 +1,50 @@
+Running LLM queue load matrix: levels=10 50 200
+--- concurrency=10 requests=40 ---
+{
+  "status": "ok",
+  "requests": 40,
+  "concurrency": 10,
+  "ok": 40,
+  "busy": 0,
+  "errors": 0,
+  "rejection_rate": 0.0,
+  "error_samples": [],
+  "latency_ms": {
+    "p50": 23632.04,
+    "p95": 24497.57,
+    "p99": 24510.02,
+    "avg": 18119.46
+  },
+  "metrics_delta": {
+    "llm_wait_total_seconds": 0.000148,
+    "llm_wait_samples": 40,
+    "llm_rejected": 0,
+    "llm_rejection_rate": 0.0
+  }
+}
+--- concurrency=50 requests=100 ---
+{
+  "status": "failed",
+  "requests": 100,
+  "concurrency": 50,
+  "ok": 32,
+  "busy": 68,
+  "errors": 68,
+  "rejection_rate": 0.68,
+  "error_samples": [
+    "Server busy"
+  ],
+  "latency_ms": {
+    "p50": 5074.48,
+    "p95": 25132.49,
+    "p99": 25143.54,
+    "avg": 11467.99
+  },
+  "metrics_delta": {
+    "llm_wait_total_seconds": 340.67097,
+    "llm_wait_samples": 100,
+    "llm_rejected": 68,
+    "llm_rejection_rate": 0.68
+  },
+  "reason": "p95_latency_exceeded"
+}

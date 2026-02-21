@@ -44,7 +44,7 @@ impl AntigravityClient {
         let _ = manager.load_from_store().await; // Load existing token if any
 
         // Check if we have a valid token (even expired, as manager handles refresh)
-        let has_oauth = manager.get_token().await.is_ok(); 
+        let has_oauth = manager.get_token().await.is_ok();
 
         let token_manager = if has_oauth { Some(manager) } else { None };
 
@@ -57,10 +57,7 @@ impl AntigravityClient {
         if token_manager.is_none() {
             Err(anyhow!("No Antigravity token found. run 'nanobot login'"))
         } else {
-            eprintln!(
-                "DEBUG: oauth_mode: {}",
-                token_manager.is_some()
-            );
+            eprintln!("DEBUG: oauth_mode: {}", token_manager.is_some());
             Ok(Self::new(base_urls, token_manager, None))
         }
     }
@@ -525,7 +522,11 @@ async fn stream_with_fallback(
     };
 
     let mut last_error = None;
-    let max_retries = 3;
+    let bench_mode = std::env::var("NANOBOT_LLM_BENCH_MODE")
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false);
+    let max_retries = if bench_mode { 1 } else { 3 };
 
     // Find Production Base URL for Discovery/Activation
     let prod_base_url = base_urls
@@ -571,16 +572,12 @@ async fn stream_with_fallback(
         }
     }
 
-    let mut retry_count = 0;
-
-    for _ in 0..max_retries {
+    for retry_count in 0..max_retries {
         // Step 3: Chat URL Selection
         let url = if is_cloudcode {
-            // CloudCode Mode: Use Production (since Activation confirmed it works there)
-            format!(
-                "{}/v1internal:streamGenerateContent?alt=sse",
-                prod_base_url.trim_end_matches('/')
-            )
+            // CloudCode Mode: discovery/activation on production, chat on sandbox.
+            // Ref: docs/guides/ANTIGRAVITY_IMPLEMENTATION_GUIDE.md
+            "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse".to_string()
         } else {
             // API Key Mode: Use generic v1beta endpoint
             // Find a generative language URL or fallback
@@ -610,22 +607,35 @@ async fn stream_with_fallback(
             resolved_project_id
         );
 
-        // DYNAMIC MODEL SELECTION
-        let mut model_to_use = "gemini-3-flash".to_string(); // Default Preference
+        // DYNAMIC MODEL SELECTION (guide-aligned low-cost default)
+        let forced_model = std::env::var("NANOBOT_ANTIGRAVITY_MODEL")
+            .ok()
+            .filter(|v| !v.trim().is_empty());
+        let mut model_to_use = forced_model
+            .clone()
+            .unwrap_or_else(|| "gemini-2.5-flash-lite".to_string());
 
-        if !available_models.is_empty() {
-            // OpenClaw Priority: gemini-3-flash > gemini-3-flash-preview > gemini-2.0-flash-exp > etc.
+        if forced_model.is_none() && !available_models.is_empty() {
+            // Guide/OpenClaw-friendly priority with low-cost first.
             let priorities = [
-                "gemini-3-flash",
-                "gemini-3-flash-preview",
-                "google-antigravity/gemini-2.0-flash-exp",
+                "gemini-2.5-flash-lite",
+                "gemini-2.5-flash",
                 "gemini-2.0-flash-exp",
-                "gemini-1.5-flash",
+                "gemini-3-flash",
+                "gemini-1.5-pro",
+                "google-antigravity/gemini-2.0-flash-exp",
+                "google-antigravity/gemini-3-flash",
+                "google-antigravity/gemini-1.5-pro",
             ];
 
             if let Some(preferred) = priorities
                 .iter()
-                .find(|&&p| available_models.contains(&p.to_string()))
+                .find(|&&p| {
+                    available_models.contains(&p.to_string())
+                        || (p.starts_with("google-antigravity/")
+                            && available_models
+                                .contains(&p.trim_start_matches("google-antigravity/").to_string()))
+                })
             {
                 model_to_use = preferred.to_string();
             } else if let Some(first) = available_models.first() {
@@ -667,11 +677,15 @@ async fn stream_with_fallback(
             user_msg
         );
 
-        // 2. Prepare Dummy Model Turn (To satisfy User -> Model alternation)
+        // 2. Prepare user turn (cloudcode now requires turn ending in user/empty role)
         modified_request.contents = vec![Content {
-            role: "model".to_string(),
+            role: "user".to_string(),
             parts: vec![Part {
-                text: Some(" ".to_string()),
+                text: Some(if user_msg.trim().is_empty() {
+                    " ".to_string()
+                } else {
+                    user_msg.clone()
+                }),
                 function_call: None,
                 function_response: None,
             }],
@@ -827,12 +841,20 @@ User: {}"#,
                     let status = resp.status();
                     let text = resp.text().await.unwrap_or_default();
                     eprintln!("DEBUG: Stream setup failed: {} - {}", status, text);
+                    let formatted = format_antigravity_http_error(status.as_u16(), &text);
                     last_error = Some(CompletionError::ProviderError(format!(
                         "Stream setup failed: {}",
-                        status
+                        formatted
                     )));
 
-                    if status.as_u16() == 429 {
+                    if should_stop_on_error(status.as_u16(), &text) {
+                        return Err(CompletionError::ProviderError(format!(
+                            "Stream setup failed: {}",
+                            formatted
+                        )));
+                    }
+
+                    if !bench_mode && status.as_u16() == 429 {
                         let backoff = (retry_count + 1) * 2000;
                         eprintln!("DEBUG: 429 Throttled. Backing off {}ms", backoff);
                         tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
@@ -845,8 +867,9 @@ User: {}"#,
             }
         }
 
-        retry_count += 1;
-        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        if !bench_mode {
+            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        }
     }
 
     Err(last_error
@@ -918,6 +941,7 @@ struct CodeAssistMetadata {
 
 #[derive(Debug, Deserialize)]
 struct LoadCodeAssistResponse {
+    project: Option<String>,
     #[serde(rename = "cloudaicompanionProject")]
     cloudaicompanion_project: Option<String>,
 }
@@ -928,7 +952,7 @@ async fn load_project_id(client: &reqwest::Client, base_url: &str, token: &str) 
 
     let request_body = LoadCodeAssistRequest {
         metadata: CodeAssistMetadata {
-            ide_type: "ANTIGRAVITY".to_string(), // Authenticate as Antigravity for higher quota?
+            ide_type: "IDE_UNSPECIFIED".to_string(),
             platform: "PLATFORM_UNSPECIFIED".to_string(),
             plugin_type: "GEMINI".to_string(),
         },
@@ -938,7 +962,7 @@ async fn load_project_id(client: &reqwest::Client, base_url: &str, token: &str) 
         .post(&url)
         .header("Authorization", format!("Bearer {}", token))
         .header("Content-Type", "application/json")
-        .header("User-Agent", "antigravity")
+        .header("User-Agent", "antigravity/1.99.0 linux/x64")
         .header(
             "X-Goog-Api-Client",
             "google-cloud-sdk vscode_cloudshelleditor/0.1",
@@ -966,11 +990,15 @@ async fn load_project_id(client: &reqwest::Client, base_url: &str, token: &str) 
 
             match resp.json::<LoadCodeAssistResponse>().await {
                 Ok(data) => {
+                    let project = data
+                        .project
+                        .filter(|p| !p.trim().is_empty())
+                        .or(data.cloudaicompanion_project.filter(|p| !p.trim().is_empty()));
                     eprintln!(
                         "DEBUG: Received Project ID: {:?}",
-                        data.cloudaicompanion_project
+                        project
                     );
-                    data.cloudaicompanion_project
+                    project
                 }
                 Err(e) => {
                     eprintln!("DEBUG: Failed to parse loadCodeAssist response: {}", e);
@@ -1005,7 +1033,7 @@ async fn fetch_available_models(
     let handshake_url = format!("{}/v1internal:loadCodeAssist", base);
     let handshake_body = serde_json::json!({
         "metadata": {
-            "ideType": "ANTIGRAVITY",
+            "ideType": "IDE_UNSPECIFIED",
             "platform": "PLATFORM_UNSPECIFIED",
             "pluginType": "GEMINI"
         }
@@ -1016,7 +1044,7 @@ async fn fetch_available_models(
         .post(&handshake_url)
         .header("Authorization", format!("Bearer {}", token))
         .header("Content-Type", "application/json")
-        .header("User-Agent", "antigravity")
+        .header("User-Agent", "antigravity/1.99.0 linux/x64")
         .header(
             "X-Goog-Api-Client",
             "google-cloud-sdk vscode_cloudshelleditor/0.1",
@@ -1032,7 +1060,7 @@ async fn fetch_available_models(
     let response = client
         .post(&url)
         .header("Authorization", format!("Bearer {}", token))
-        .header("User-Agent", "antigravity")
+        .header("User-Agent", "antigravity/1.99.0 linux/x64")
         .header(
             "X-Goog-Api-Client",
             "google-cloud-sdk vscode_cloudshelleditor/0.1",
@@ -1047,9 +1075,26 @@ async fn fetch_available_models(
             if resp.status().is_success() {
                 if let Ok(text) = resp.text().await
                     && let Ok(json) = serde_json::from_str::<serde_json::Value>(&text)
-                    && let Some(models_obj) = json.get("models").and_then(|m| m.as_object())
                 {
-                    let model_ids: Vec<String> = models_obj.keys().cloned().collect();
+                    let model_ids: Vec<String> = json
+                        .get("models")
+                        .map(|m| {
+                            if let Some(arr) = m.as_array() {
+                                arr.iter()
+                                    .filter_map(|entry| {
+                                        entry
+                                            .get("name")
+                                            .and_then(|name| name.as_str())
+                                            .map(|name| name.to_string())
+                                    })
+                                    .collect()
+                            } else if let Some(obj) = m.as_object() {
+                                obj.keys().cloned().collect()
+                            } else {
+                                Vec::new()
+                            }
+                        })
+                        .unwrap_or_default();
                     eprintln!(
                         "DEBUG: Activation successful. Available models: {:?}",
                         model_ids
@@ -1378,15 +1423,15 @@ User: {}"#,
                         let text = response.text().await.unwrap_or_default();
                         if should_stop_on_error(status.as_u16(), &text) {
                             return Err(CompletionError::ProviderError(format!(
-                                "API Error {}: {}",
-                                status, text
+                                "{}",
+                                format_antigravity_http_error(status.as_u16(), &text)
                             )));
                         }
 
                         // If we are here, it's a non-retryable error or retries exhausted
                         last_error = Some(CompletionError::ProviderError(format!(
-                            "API Error {}: {}",
-                            status, text
+                            "{}",
+                            format_antigravity_http_error(status.as_u16(), &text)
                         )));
                         break;
                     }
@@ -1730,6 +1775,11 @@ async fn send_chat_with_fallback(
 fn should_stop_on_error(status: u16, body: &str) -> bool {
     if status == 401 || status == 403 {
         let body_lower = body.to_lowercase();
+        if body_lower.contains("validation_required")
+            || body_lower.contains("verify your account")
+        {
+            return true;
+        }
         if body_lower.contains("license") {
             return true;
         }
@@ -1740,6 +1790,54 @@ fn should_stop_on_error(status: u16, body: &str) -> bool {
     }
 
     false
+}
+
+fn format_antigravity_http_error(status: u16, body: &str) -> String {
+    if status == 403 {
+        let body_lower = body.to_ascii_lowercase();
+        if body_lower.contains("validation_required") || body_lower.contains("verify your account") {
+            if let Some(url) = extract_antigravity_validation_url(body) {
+                return format!(
+                    "403 PERMISSION_DENIED (VALIDATION_REQUIRED): verify your Google account to continue: {}",
+                    url
+                );
+            }
+            return "403 PERMISSION_DENIED (VALIDATION_REQUIRED): verify your Google account to continue".to_string();
+        }
+    }
+
+    format!("API Error {}: {}", status, body)
+}
+
+fn extract_antigravity_validation_url(body: &str) -> Option<String> {
+    let json: serde_json::Value = serde_json::from_str(body).ok()?;
+
+    if let Some(url) = json
+        .pointer("/error/details/0/metadata/validation_url")
+        .and_then(|v| v.as_str())
+        && !url.trim().is_empty()
+    {
+        return Some(url.to_string());
+    }
+
+    let details = json.pointer("/error/details")?.as_array()?;
+    for detail in details {
+        if let Some(links) = detail.get("links").and_then(|v| v.as_array()) {
+            for link in links {
+                let desc = link
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                let url = link.get("url").and_then(|v| v.as_str()).unwrap_or_default();
+                if desc.contains("verify") && !url.trim().is_empty() {
+                    return Some(url.to_string());
+                }
+            }
+        }
+    }
+
+    None
 }
 
 fn build_candidate_urls(base_url: &str) -> Vec<String> {
@@ -1866,6 +1964,59 @@ fn message_to_content(message: Message) -> Option<Content> {
                 })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_validation_url_from_error_payload() {
+        let body = r#"{
+            "error": {
+                "code": 403,
+                "message": "Verify your account to continue.",
+                "status": "PERMISSION_DENIED",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                        "reason": "VALIDATION_REQUIRED",
+                        "metadata": {
+                            "validation_url": "https://accounts.google.com/signin/continue"
+                        }
+                    }
+                ]
+            }
+        }"#;
+
+        let url = extract_antigravity_validation_url(body).expect("validation url should parse");
+        assert_eq!(url, "https://accounts.google.com/signin/continue");
+    }
+
+    #[test]
+    fn formats_validation_required_error_with_actionable_message() {
+        let body = r#"{
+            "error": {
+                "code": 403,
+                "message": "Verify your account to continue.",
+                "status": "PERMISSION_DENIED",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                        "reason": "VALIDATION_REQUIRED",
+                        "metadata": {
+                            "validation_url": "https://accounts.google.com/signin/continue"
+                        }
+                    }
+                ]
+            }
+        }"#;
+
+        let formatted = format_antigravity_http_error(403, body);
+        assert!(formatted.contains("VALIDATION_REQUIRED"));
+        assert!(formatted.contains("verify your Google account"));
+        assert!(formatted.contains("https://accounts.google.com/signin/continue"));
     }
 }
 

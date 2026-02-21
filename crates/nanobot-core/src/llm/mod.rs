@@ -1,2 +1,2 @@
-pub mod meta_provider;
 pub mod config;
+pub mod meta_provider;

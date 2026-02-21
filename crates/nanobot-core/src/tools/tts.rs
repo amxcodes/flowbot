@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde_json::Value;
 use tokio::process::Command;
 
@@ -44,7 +44,9 @@ fn resolve_runtime_bin(runtime_dir: &str) -> Result<String> {
         path.set_extension("exe");
     }
     if !path.exists() {
-        return Err(anyhow!("sherpa-onnx-offline-tts binary not found in runtime dir"));
+        return Err(anyhow!(
+            "sherpa-onnx-offline-tts binary not found in runtime dir"
+        ));
     }
     Ok(path.to_string_lossy().to_string())
 }
@@ -56,7 +58,11 @@ fn resolve_model_file(model_dir: &str) -> Result<String> {
 
     let dir = std::path::Path::new(model_dir);
     let mut candidate: Option<String> = None;
-    for entry in walkdir::WalkDir::new(dir).max_depth(6).into_iter().flatten() {
+    for entry in walkdir::WalkDir::new(dir)
+        .max_depth(6)
+        .into_iter()
+        .flatten()
+    {
         if !entry.file_type().is_file() {
             continue;
         }
@@ -150,7 +156,12 @@ pub async fn execute_tts(args: &Value) -> Result<String> {
         let path_sep = if cfg!(windows) { ";" } else { ":" };
         cmd.env(
             "PATH",
-            format!("{}{}{}", lib_str, path_sep, std::env::var("PATH").unwrap_or_default()),
+            format!(
+                "{}{}{}",
+                lib_str,
+                path_sep,
+                std::env::var("PATH").unwrap_or_default()
+            ),
         );
     }
 

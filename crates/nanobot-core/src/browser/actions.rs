@@ -1,7 +1,7 @@
 // Browser actions (navigate, click, type, screenshot, etc.)
-use anyhow::{anyhow, Result};
-use chromiumoxide::page::Page;
+use anyhow::{Result, anyhow};
 use chromiumoxide::cdp::js_protocol::runtime::RemoteObject;
+use chromiumoxide::page::Page;
 
 pub struct BrowserActions;
 
@@ -12,12 +12,12 @@ impl BrowserActions {
             .find_element(selector)
             .await
             .map_err(|e| anyhow!("Element '{}' not found: {}", selector, e))?;
-        
+
         element
             .click()
             .await
             .map_err(|e| anyhow!("Click failed: {}", e))?;
-        
+
         Ok(format!("✅ Clicked element: {}", selector))
     }
 
@@ -27,45 +27,47 @@ impl BrowserActions {
             .find_element(selector)
             .await
             .map_err(|e| anyhow!("Element '{}' not found: {}", selector, e))?;
-        
+
         element
             .click()
             .await
             .map_err(|e| anyhow!("Focus failed: {}", e))?;
-        
+
         element
             .type_str(text)
             .await
             .map_err(|e| anyhow!("Type failed: {}", e))?;
-        
+
         Ok(format!("✅ Typed '{}' into: {}", text, selector))
     }
 
     /// Take a screenshot of the entire page (PNG format)
     pub async fn screenshot(page: &Page) -> Result<Vec<u8>> {
-        use chromiumoxide::cdp::browser_protocol::page::{CaptureScreenshotParams, CaptureScreenshotFormat};
-        
+        use chromiumoxide::cdp::browser_protocol::page::{
+            CaptureScreenshotFormat, CaptureScreenshotParams,
+        };
+
         let params = CaptureScreenshotParams::builder()
             .format(CaptureScreenshotFormat::Png)
             .build();
-            
+
         let screenshot = page
             .screenshot(params)
             .await
             .map_err(|e| anyhow!("Screenshot failed: {}", e))?;
-        
+
         Ok(screenshot)
     }
 
     /// Print page to PDF
     pub async fn print_to_pdf(page: &Page) -> Result<Vec<u8>> {
         use chromiumoxide::cdp::browser_protocol::page::PrintToPdfParams;
-        
+
         let pdf = page
             .pdf(PrintToPdfParams::builder().build())
             .await
             .map_err(|e| anyhow!("PDF generation failed: {}", e))?;
-            
+
         Ok(pdf)
     }
 
@@ -78,7 +80,7 @@ impl BrowserActions {
             .map_err(|e| anyhow!("Script execution failed: {}", e))?
             .into_value()
             .map_err(|e| anyhow!("Failed to get script result: {}", e))?;
-        
+
         // Serialize the remote object to JSON
         Ok(serde_json::to_string_pretty(&result)?)
     }
@@ -89,7 +91,7 @@ impl BrowserActions {
             .content()
             .await
             .map_err(|e| anyhow!("Failed to get page HTML: {}", e))?;
-        
+
         Ok(html)
     }
 
@@ -99,7 +101,7 @@ impl BrowserActions {
             .get_title()
             .await
             .map_err(|e| anyhow!("Failed to get title: {}", e))?;
-        
+
         Ok(title.unwrap_or_default())
     }
 }

@@ -1,5 +1,5 @@
-use async_trait::async_trait;
 use anyhow::Result;
+use async_trait::async_trait;
 
 use crate::config::DmScope;
 
@@ -9,13 +9,13 @@ use crate::config::DmScope;
 pub trait ChannelAdapter: Send + Sync {
     /// Send a complete message to a user
     async fn send_message(&self, user_id: &str, content: &str) -> Result<()>;
-    
+
     /// Send a streaming chunk to a user (for progressive responses)
     async fn send_stream_chunk(&self, user_id: &str, chunk: &str) -> Result<()>;
-    
+
     /// Get the channel identifier (e.g., "slack", "discord", "web")
     fn channel_name(&self) -> &str;
-    
+
     /// Get the platform-specific user identifier format
     fn format_user_id(&self, raw_id: &str) -> String {
         format!("{}:{}", self.channel_name(), raw_id)
@@ -42,7 +42,7 @@ impl ChannelMessage {
             metadata: serde_json::Value::Null,
         }
     }
-    
+
     /// Generate a unique session key for routing
     pub fn session_key(&self) -> String {
         format!("{}:user:{}", self.channel_id, self.user_id)

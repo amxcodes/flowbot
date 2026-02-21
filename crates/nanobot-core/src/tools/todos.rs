@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TodoItem {
+pub(super) struct TodoItem {
     pub id: String,
     pub content: String,
     pub status: String,
@@ -10,11 +10,15 @@ pub struct TodoItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TodoWriteArgs {
+pub(super) struct TodoWriteArgs {
     pub todos: Vec<TodoItem>,
 }
 
-pub async fn todo_write(args: TodoWriteArgs, tenant_id: Option<&str>) -> Result<String> {
+pub(super) async fn todo_write(
+    _token: &super::ExecutorToken,
+    args: TodoWriteArgs,
+    tenant_id: Option<&str>,
+) -> Result<String> {
     if args.todos.is_empty() {
         return Err(anyhow::anyhow!("todos cannot be empty"));
     }

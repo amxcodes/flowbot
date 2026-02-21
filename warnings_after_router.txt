@@ -1,0 +1,2 @@
+    Checking nanobot-core v0.1.0 (C:\Users\AMAN ANU\Desktop\amxcodes\nanobot\nanobot-rs-clean\crates\nanobot-core)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.76s

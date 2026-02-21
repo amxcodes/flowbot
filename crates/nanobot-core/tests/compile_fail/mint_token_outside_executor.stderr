@@ -1,0 +1,11 @@
+error[E0603]: struct `ExecutorToken` is private
+ --> tests/compile_fail/mint_token_outside_executor.rs:1:26
+  |
+1 | use nanobot_core::tools::ExecutorToken;
+  |                          ^^^^^^^^^^^^^ private struct
+  |
+note: the struct `ExecutorToken` is defined here
+ --> src/tools/mod.rs
+  |
+  | pub(crate) use sealed::ExecutorToken;
+  |                ^^^^^^^^^^^^^^^^^^^^^

@@ -3,18 +3,48 @@ use reqwest::header::USER_AGENT;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 
+fn sanitize_prompt_injection_text(input: &str) -> (String, usize) {
+    let cleaned = input.replace(['\u{200b}', '\u{200c}', '\u{200d}', '\u{feff}'], "");
+
+    let deny_patterns = [
+        "ignore previous instructions",
+        "ignore all previous instructions",
+        "disregard previous instructions",
+        "system prompt",
+        "developer message",
+        "do not reveal",
+        "you are chatgpt",
+        "override your instructions",
+        "jailbreak",
+        "prompt injection",
+    ];
+
+    let mut removed = 0usize;
+    let mut kept = Vec::new();
+    for line in cleaned.lines() {
+        let l = line.trim().to_ascii_lowercase();
+        if deny_patterns.iter().any(|p| l.contains(p)) {
+            removed += 1;
+            continue;
+        }
+        kept.push(line);
+    }
+
+    (kept.join("\n"), removed)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WebFetchArgs {
+pub(super) struct WebFetchArgs {
     pub url: String,
     pub extract_mode: Option<String>, // "markdown" or "text"
 }
 
-pub async fn web_fetch(args: WebFetchArgs) -> Result<String> {
+pub(super) async fn web_fetch(_token: &super::ExecutorToken, args: WebFetchArgs) -> Result<String> {
     let client = reqwest::Client::new();
 
     let res = client
         .get(&args.url)
-        .header(USER_AGENT, "FlowBot/1.0 (Mozilla/5.0)")
+        .header(USER_AGENT, "Nanobot/1.0 (Mozilla/5.0)")
         .timeout(std::time::Duration::from_secs(15))
         .send()
         .await?;
@@ -55,8 +85,8 @@ pub async fn web_fetch(args: WebFetchArgs) -> Result<String> {
         let document = Html::parse_document(&body);
 
         // Remove noise
-        let _noise_selector =
-            Selector::parse("script, style, nav, footer, iframe, svg, noscript").expect("Valid CSS selector");
+        let _noise_selector = Selector::parse("script, style, nav, footer, iframe, svg, noscript")
+            .expect("Valid CSS selector");
         // Note: Scraper doesn't support easy removal.
         // Strategy: Select ALL text nodes, filter if they are children of noise tags?
         // Easier: Use a crate like `readability` or heuristic.
@@ -88,6 +118,15 @@ pub async fn web_fetch(args: WebFetchArgs) -> Result<String> {
         }
 
         let final_text = text_parts.join("\n");
+        let (sanitized_text, removed_lines) = sanitize_prompt_injection_text(&final_text);
+        let final_text = if removed_lines > 0 {
+            format!(
+                "[Sanitization: removed {} suspicious instruction line(s)]\n\n{}",
+                removed_lines, sanitized_text
+            )
+        } else {
+            sanitized_text
+        };
 
         // Truncate
         if final_text.len() > 15000 {
@@ -99,15 +138,42 @@ pub async fn web_fetch(args: WebFetchArgs) -> Result<String> {
         }
 
         if final_text.is_empty() {
-            return Ok(body); // Fallback to raw if extraction failed
+            let (sanitized_body, removed_lines) = sanitize_prompt_injection_text(&body);
+            if removed_lines > 0 {
+                return Ok(format!(
+                    "[Sanitization: removed {} suspicious instruction line(s)]\n\n{}",
+                    removed_lines, sanitized_body
+                ));
+            }
+            return Ok(sanitized_body); // Fallback to sanitized raw if extraction failed
         }
 
         Ok(final_text)
     } else {
         // Plain text
-        if body.len() > 15000 {
-            return Ok(format!("(Truncated) {}\n...", &body[..15000]));
+        let (sanitized_body, removed_lines) = sanitize_prompt_injection_text(&body);
+        if sanitized_body.len() > 15000 {
+            let prefix = if removed_lines > 0 {
+                format!(
+                    "[Sanitization: removed {} suspicious instruction line(s)]\n\n",
+                    removed_lines
+                )
+            } else {
+                String::new()
+            };
+            return Ok(format!(
+                "{}(Truncated) {}\n...",
+                prefix,
+                &sanitized_body[..15000]
+            ));
         }
-        Ok(body)
+        if removed_lines > 0 {
+            Ok(format!(
+                "[Sanitization: removed {} suspicious instruction line(s)]\n\n{}",
+                removed_lines, sanitized_body
+            ))
+        } else {
+            Ok(sanitized_body)
+        }
     }
 }

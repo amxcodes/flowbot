@@ -36,6 +36,12 @@ pub struct ToolRegistry {
     tools: std::collections::HashMap<String, Box<dyn Tool>>,
 }
 
+impl Default for ToolRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ToolRegistry {
     pub fn new() -> Self {
         Self {
@@ -47,8 +53,8 @@ impl ToolRegistry {
         self.tools.insert(tool.name().to_string(), tool);
     }
 
-    pub fn get(&self, name: &str) -> Option<&Box<dyn Tool>> {
-        self.tools.get(name)
+    pub fn get(&self, name: &str) -> Option<&dyn Tool> {
+        self.tools.get(name).map(|tool| tool.as_ref())
     }
 
     pub fn list_tools(&self) -> Vec<Value> {
@@ -164,17 +170,8 @@ pub fn get_tool_registry() -> &'static ToolRegistry {
         let mut registry = ToolRegistry::new();
 
         // Register all implemented tools
-        registry.register(Box::new(super::read_file_tool::ReadFileTool));
-        registry.register(Box::new(super::write_file_tool::WriteFileTool));
-        registry.register(Box::new(super::list_directory_tool::ListDirectoryTool));
         registry.register(Box::new(super::web_search_tool::WebSearchTool));
         registry.register(Box::new(super::run_command_tool::RunCommandTool));
-        registry.register(Box::new(super::edit_file_tool::EditFileTool));
-        registry.register(Box::new(super::spawn_process_tool::SpawnProcessTool));
-        registry.register(Box::new(super::read_process_output_tool::ReadProcessOutputTool));
-        registry.register(Box::new(super::kill_process_tool::KillProcessTool));
-        registry.register(Box::new(super::web_fetch_tool::WebFetchTool));
-        registry.register(Box::new(super::write_process_input_tool::WriteProcessInputTool));
         registry.register(Box::new(super::script_eval_tool::ScriptEvalTool));
 
         registry

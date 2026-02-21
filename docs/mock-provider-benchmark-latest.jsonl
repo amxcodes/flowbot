@@ -1,0 +1,245 @@
+Mock provider benchmark 2026-02-17T07:29:54Z
+service_ms=500 chunks=5
+--- permits=4 ---
+--- concurrency=10 requests=40 ---
+{
+  "status": "ok",
+  "requests": 40,
+  "concurrency": 10,
+  "ok": 40,
+  "busy": 0,
+  "errors": 0,
+  "rejection_rate": 0.0,
+  "error_samples": [],
+  "latency_ms": {
+    "p50": 608.31,
+    "p95": 1107.53,
+    "p99": 1171.88,
+    "avg": 700.64
+  },
+  "metrics_delta": {
+    "llm_wait_total_seconds": 4.043884,
+    "llm_wait_samples": 40,
+    "llm_service_total_seconds": 22.166437,
+    "llm_service_samples": 40,
+    "llm_service_avg_seconds": 0.554161,
+    "llm_rejected": 0,
+    "llm_rejection_rate": 0.0
+  }
+}
+--- concurrency=50 requests=100 ---
+{
+  "status": "ok",
+  "requests": 100,
+  "concurrency": 50,
+  "ok": 100,
+  "busy": 0,
+  "errors": 0,
+  "rejection_rate": 0.0,
+  "error_samples": [],
+  "latency_ms": {
+    "p50": 3349.93,
+    "p95": 3902.23,
+    "p99": 3984.8,
+    "avg": 2804.78
+  },
+  "metrics_delta": {
+    "llm_wait_total_seconds": 218.962786,
+    "llm_wait_samples": 100,
+    "llm_service_total_seconds": 56.191434,
+    "llm_service_samples": 100,
+    "llm_service_avg_seconds": 0.561914,
+    "llm_rejected": 0,
+    "llm_rejection_rate": 0.0
+  }
+}
+--- concurrency=200 requests=400 ---
+{
+  "status": "ok",
+  "requests": 400,
+  "concurrency": 200,
+  "ok": 153,
+  "busy": 247,
+  "errors": 247,
+  "rejection_rate": 0.6175,
+  "error_samples": [
+    "Server busy"
+  ],
+  "latency_ms": {
+    "p50": 5605.13,
+    "p95": 6703.45,
+    "p99": 7080.66,
+    "avg": 5277.53
+  },
+  "metrics_delta": {
+    "llm_wait_total_seconds": 1851.83827,
+    "llm_wait_samples": 400,
+    "llm_service_total_seconds": 98.83065,
+    "llm_service_samples": 153,
+    "llm_service_avg_seconds": 0.645952,
+    "llm_rejected": 247,
+    "llm_rejection_rate": 0.6175
+  }
+}
+--- permits=8 ---
+--- concurrency=10 requests=40 ---
+{
+  "status": "ok",
+  "requests": 40,
+  "concurrency": 10,
+  "ok": 40,
+  "busy": 0,
+  "errors": 0,
+  "rejection_rate": 0.0,
+  "error_samples": [],
+  "latency_ms": {
+    "p50": 608.73,
+    "p95": 1080.05,
+    "p99": 1134.93,
+    "avg": 697.53
+  },
+  "metrics_delta": {
+    "llm_wait_total_seconds": 3.839973,
+    "llm_wait_samples": 40,
+    "llm_service_total_seconds": 21.986333,
+    "llm_service_samples": 40,
+    "llm_service_avg_seconds": 0.549658,
+    "llm_rejected": 0,
+    "llm_rejection_rate": 0.0
+  }
+}
+--- concurrency=50 requests=100 ---
+{
+  "status": "ok",
+  "requests": 100,
+  "concurrency": 50,
+  "ok": 100,
+  "busy": 0,
+  "errors": 0,
+  "rejection_rate": 0.0,
+  "error_samples": [],
+  "latency_ms": {
+    "p50": 3355.1,
+    "p95": 3926.8,
+    "p99": 4017.27,
+    "avg": 2813.83
+  },
+  "metrics_delta": {
+    "llm_wait_total_seconds": 218.73566,
+    "llm_wait_samples": 100,
+    "llm_service_total_seconds": 56.111084,
+    "llm_service_samples": 100,
+    "llm_service_avg_seconds": 0.561111,
+    "llm_rejected": 0,
+    "llm_rejection_rate": 0.0
+  }
+}
+--- concurrency=200 requests=400 ---
+{
+  "status": "ok",
+  "requests": 400,
+  "concurrency": 200,
+  "ok": 155,
+  "busy": 245,
+  "errors": 245,
+  "rejection_rate": 0.6125,
+  "error_samples": [
+    "Server busy"
+  ],
+  "latency_ms": {
+    "p50": 6228.3,
+    "p95": 7304.03,
+    "p99": 7745.73,
+    "avg": 5749.08
+  },
+  "metrics_delta": {
+    "llm_wait_total_seconds": 1883.56559,
+    "llm_wait_samples": 400,
+    "llm_service_total_seconds": 109.233249,
+    "llm_service_samples": 155,
+    "llm_service_avg_seconds": 0.704731,
+    "llm_rejected": 245,
+    "llm_rejection_rate": 0.6125
+  }
+}
+--- permits=16 ---
+--- concurrency=10 requests=40 ---
+{
+  "status": "ok",
+  "requests": 40,
+  "concurrency": 10,
+  "ok": 40,
+  "busy": 0,
+  "errors": 0,
+  "rejection_rate": 0.0,
+  "error_samples": [],
+  "latency_ms": {
+    "p50": 619.82,
+    "p95": 1083.97,
+    "p99": 1180.68,
+    "avg": 706.75
+  },
+  "metrics_delta": {
+    "llm_wait_total_seconds": 3.767432,
+    "llm_wait_samples": 40,
+    "llm_service_total_seconds": 22.108164,
+    "llm_service_samples": 40,
+    "llm_service_avg_seconds": 0.552704,
+    "llm_rejected": 0,
+    "llm_rejection_rate": 0.0
+  }
+}
+--- concurrency=50 requests=100 ---
+{
+  "status": "ok",
+  "requests": 100,
+  "concurrency": 50,
+  "ok": 100,
+  "busy": 0,
+  "errors": 0,
+  "rejection_rate": 0.0,
+  "error_samples": [],
+  "latency_ms": {
+    "p50": 3362.1,
+    "p95": 3917.27,
+    "p99": 4002.28,
+    "avg": 2811.46
+  },
+  "metrics_delta": {
+    "llm_wait_total_seconds": 217.798879,
+    "llm_wait_samples": 100,
+    "llm_service_total_seconds": 56.104051,
+    "llm_service_samples": 100,
+    "llm_service_avg_seconds": 0.561041,
+    "llm_rejected": 0,
+    "llm_rejection_rate": 0.0
+  }
+}
+--- concurrency=200 requests=400 ---
+{
+  "status": "ok",
+  "requests": 400,
+  "concurrency": 200,
+  "ok": 156,
+  "busy": 244,
+  "errors": 244,
+  "rejection_rate": 0.61,
+  "error_samples": [
+    "Server busy"
+  ],
+  "latency_ms": {
+    "p50": 6151.35,
+    "p95": 7991.3,
+    "p99": 8521.93,
+    "avg": 5938.1
+  },
+  "metrics_delta": {
+    "llm_wait_total_seconds": 1896.583279,
+    "llm_wait_samples": 400,
+    "llm_service_total_seconds": 114.786667,
+    "llm_service_samples": 156,
+    "llm_service_avg_seconds": 0.735812,
+    "llm_rejected": 244,
+    "llm_rejection_rate": 0.61
+  }
+}

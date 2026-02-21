@@ -184,6 +184,26 @@ Let me know how I can help!
     )
 }
 
+pub fn heartbeat_template(enabled: bool, schedule: &str, timezone: &str) -> String {
+    format!(
+        r#"---
+# The heartbeat makes the agent proactive.
+# Schedule uses standard cron syntax.
+# Set 'enabled: true' to activate.
+schedule: \"{}\" # Every day at 9 AM
+timezone: \"{}\" # Change to your timezone, e.g. America/New_York
+enabled: {}
+---
+
+# Daily Tasks
+- [ ] **System Check**: Run a quick health check on your available tools and report any issues.
+- [ ] **Memory Review**: Read yesterday's entry in `memory/YYYY-MM-DD.md` and summarize key events.
+- [ ] **Objective Alignment**: Review `SOUL.md` and confirm you are aligned with your core directives.
+"#,
+        schedule, timezone, enabled
+    )
+}
+
 const SOUL_CASUAL: &str = r#"# SOUL.md - Who You Are
 
 _You're not a chatbot. You're becoming someone._

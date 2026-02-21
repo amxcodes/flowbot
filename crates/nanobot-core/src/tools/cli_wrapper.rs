@@ -41,7 +41,10 @@ impl Default for CliOutputConfig {
 /// };
 /// let output = run_and_format(args).await?;
 /// ```
-pub async fn run_and_format(mut args: RunCommandArgs) -> Result<String> {
+pub(super) async fn run_and_format(
+    _token: &super::ExecutorToken,
+    mut args: RunCommandArgs,
+) -> Result<String> {
     // Resolve command for Windows compatibility (Parity with OpenClaw)
     args.command = resolve_command(&args.command);
 
@@ -51,20 +54,21 @@ pub async fn run_and_format(mut args: RunCommandArgs) -> Result<String> {
         // First check if Docker is available
         if super::docker_executor::is_docker_available() {
             let config = super::docker_executor::SandboxConfig {
-                image: args.docker_image.clone().unwrap_or_else(|| "alpine:latest".to_string()),
+                image: args
+                    .docker_image
+                    .clone()
+                    .unwrap_or_else(|| "alpine:latest".to_string()),
                 // For a general "run_command" tool, we likely need network and write access
                 // to match host capabilities but within a container.
-                allow_network: true, 
+                allow_network: true,
                 writable_workspace: true,
                 workdir: Some("/workspace".to_string()),
                 env_vars: Vec::new(), // Pass env vars if needed?
             };
 
-            match super::docker_executor::execute_in_container(
-                &args.command,
-                &args.args,
-                &config,
-            ).await {
+            match super::docker_executor::execute_in_container(&args.command, &args.args, &config)
+                .await
+            {
                 Ok(output) => {
                     return Ok(format!(
                         "Status: ✅ Success (Docker)\nCommand: {} {}\nOutput:\n{}",
@@ -79,12 +83,14 @@ pub async fn run_and_format(mut args: RunCommandArgs) -> Result<String> {
                 }
             }
         } else {
-             return Err(anyhow::anyhow!("Docker execution requested but Docker is not available on this system."));
+            return Err(anyhow::anyhow!(
+                "Docker execution requested but Docker is not available on this system."
+            ));
         }
     }
 
     // Standard host execution
-    let output = run_command(args.clone()).await?;
+    let output = run_command(_token, args.clone()).await?;
     Ok(format_output(
         output,
         &args.command,
@@ -122,7 +128,7 @@ fn resolve_command(command: &str) -> String {
 ///
 /// This is exposed publicly so it can also be used for Docker command output.
 /// Applies consistent formatting with status indicators and intelligent truncation.
-pub fn format_output(
+pub(super) fn format_output(
     output: CommandOutput,
     command_name: &str,
     config: &CliOutputConfig,

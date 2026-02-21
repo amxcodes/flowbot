@@ -1,17 +1,16 @@
+use anyhow::Result;
 use axum::{
-    Router,
-    routing::{get, post},
+    Json, Router,
     extract::State,
     http::HeaderMap,
     http::StatusCode,
-    Json,
+    routing::{get, post},
 };
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use std::collections::HashMap;
 use tokio::sync::RwLock;
 
 /// Admin API state
@@ -24,21 +23,11 @@ pub struct AdminState {
     pub rate_limit: Arc<tokio::sync::Mutex<RateLimiter>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ServerStatus {
     pub uptime_secs: u64,
     pub active_agents: usize,
     pub tools_registered: usize,
-}
-
-impl Default for ServerStatus {
-    fn default() -> Self {
-        Self {
-            uptime_secs: 0,
-            active_agents: 0,
-            tools_registered: 0,
-        }
-    }
 }
 
 /// Create admin API router
@@ -53,22 +42,30 @@ pub fn create_admin_router(state: AdminState) -> Router {
 
 /// Start admin API server
 pub async fn start_admin_server(port: u16) -> Result<()> {
+    let workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let permission_manager = Arc::new(tokio::sync::Mutex::new(
-        crate::tools::PermissionManager::new(
-            crate::tools::permissions::SecurityProfile::trust(),
-        ),
+        crate::tools::PermissionManager::new(crate::tools::permissions::SecurityProfile::standard(
+            workspace,
+        )),
     ));
-    let tool_policy = Arc::new(crate::tools::ToolPolicy::permissive());
+    let tool_policy = Arc::new(
+        crate::tools::ToolPolicy::restrictive()
+            .allow_tool("read_file")
+            .allow_tool("list_directory")
+            .allow_tool("glob")
+            .allow_tool("grep")
+            .allow_tool("doctor")
+            .allow_tool("skill")
+            .allow_tool("mcp_config")
+            .allow_tool("session_status")
+            .allow_tool("sessions_wait"),
+    );
     let confirmation_service = Arc::new(tokio::sync::Mutex::new(
         crate::tools::ConfirmationService::new(),
     ));
 
-    if std::env::var("NANOBOT_ADMIN_TOKEN").is_err()
-        && crate::security::read_admin_token().ok().flatten().is_none()
-    {
-        tracing::warn!(
-            "Admin token not set; /eval will require a token and deny requests"
-        );
+    if crate::security::read_admin_auth_secret().is_none() {
+        tracing::warn!("Admin auth secret not set; /eval will require a token and deny requests");
     }
 
     let state = AdminState {
@@ -76,19 +73,22 @@ pub async fn start_admin_server(port: u16) -> Result<()> {
         permission_manager,
         tool_policy,
         confirmation_service,
-        rate_limit: Arc::new(tokio::sync::Mutex::new(RateLimiter::new(30, Duration::from_secs(60)))),
+        rate_limit: Arc::new(tokio::sync::Mutex::new(RateLimiter::new(
+            30,
+            Duration::from_secs(60),
+        ))),
     };
-    
+
     let app = create_admin_router(state);
-    
+
     let addr = format!("127.0.0.1:{}", port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    
+
     println!("🔧 Admin API listening on http://{}", addr);
     println!("   - Health: http://{}/health", addr);
     println!("   - State:  http://{}/state", addr);
     println!("   - Tools:  http://{}/tools", addr);
-    
+
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -106,10 +106,10 @@ async fn get_server_state(State(state): State<AdminState>) -> Json<ServerStatus>
 
 async fn list_tools() -> Json<Value> {
     use crate::tools::definitions::get_tool_registry;
-    
+
     let registry = get_tool_registry();
     let tools = registry.list_tools();
-    
+
     Json(json!({
         "tools": tools,
         "count": tools.len()
@@ -133,16 +133,22 @@ async fn eval_tool(
     headers: HeaderMap,
     Json(payload): Json<EvalRequest>,
 ) -> std::result::Result<Json<EvalResponse>, (StatusCode, String)> {
-    let token = std::env::var("NANOBOT_ADMIN_TOKEN")
-        .ok()
-        .or_else(|| crate::security::read_admin_token().ok().flatten());
+    let request_id = headers
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    tracing::debug!(request_id = %request_id, "Admin eval request received");
+
+    let token = crate::security::read_admin_auth_secret();
 
     let token = match token {
         Some(value) => value,
         None => {
             return Err((
                 StatusCode::UNAUTHORIZED,
-                "Admin token not set. Use nanobot admin-token set".to_string(),
+                "Admin secret not set. Set primary password in setup, or run nanobot admin-token set".to_string(),
             ));
         }
     };
@@ -153,15 +159,21 @@ async fn eval_tool(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
 
-    if auth != expected {
-        return Err((StatusCode::UNAUTHORIZED, "Missing or invalid admin token".to_string()));
+    if !crate::security::secure_eq(auth, &expected) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "Missing or invalid admin token".to_string(),
+        ));
     }
 
     {
         let mut limiter = state.rate_limit.lock().await;
-        if !limiter.allow(&auth) {
+        if !limiter.allow(auth) {
             tracing::warn!("Admin eval rate limit exceeded");
-            return Err((StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded".to_string()));
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                "Rate limit exceeded".to_string(),
+            ));
         }
     }
 
@@ -175,21 +187,44 @@ async fn eval_tool(
         obj.insert("tool".to_string(), Value::String(payload.tool));
     }
 
-    let tool_input = serde_json::to_string(&call)
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let tool_input =
+        serde_json::to_string(&call).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
 
+    #[cfg(feature = "browser")]
     let result = crate::tools::executor::execute_tool(
         &tool_input,
-        None,
-        None,
-        None,
-        None,
-        Some(&*state.permission_manager),
-        Some(&state.tool_policy),
-        Some(&*state.confirmation_service),
-        None,
-        None,
-        None,
+        crate::tools::executor::ExecuteToolContext {
+            cron_scheduler: None,
+            agent_manager: None,
+            memory_manager: None,
+            persistence: None,
+            permission_manager: Some(&*state.permission_manager),
+            tool_policy: Some(&state.tool_policy),
+            confirmation_service: Some(&*state.confirmation_service),
+            skill_loader: None,
+            browser_client: None,
+            tenant_id: None,
+            mcp_manager: None,
+        },
+    )
+    .await
+    .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+    #[cfg(not(feature = "browser"))]
+    let result = crate::tools::executor::execute_tool(
+        &tool_input,
+        crate::tools::executor::ExecuteToolContext {
+            cron_scheduler: None,
+            agent_manager: None,
+            memory_manager: None,
+            persistence: None,
+            permission_manager: Some(&*state.permission_manager),
+            tool_policy: Some(&state.tool_policy),
+            confirmation_service: Some(&*state.confirmation_service),
+            skill_loader: None,
+            tenant_id: None,
+            mcp_manager: None,
+        },
     )
     .await
     .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
@@ -230,7 +265,7 @@ impl RateLimiter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[tokio::test]
     async fn test_health_check() {
         let result = health_check().await;

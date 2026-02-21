@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use serde_json::{Value, json};
 
 use crate::gateway::agent_manager::{AgentManager, CleanupPolicy, SubagentOptions};
@@ -19,6 +19,7 @@ pub enum SessionAction {
 pub async fn execute_sessions_tool(
     agent_manager: &AgentManager,
     tool_call: &Value,
+    persistence: Option<&crate::persistence::PersistenceManager>,
 ) -> Result<String> {
     let action_str = tool_call["action"]
         .as_str()
@@ -33,7 +34,7 @@ pub async fn execute_sessions_tool(
             Some("sessions_resume") => Some("resume"),
             _ => None,
         })
-        .ok_or_else(|| anyhow!("Missing 'action' field"))?;
+        .ok_or_else(|| session_tool_error("SESSIONS_ACTION_MISSING", "Missing 'action' field"))?;
 
     let action = match action_str {
         "spawn" => SessionAction::Spawn,
@@ -44,14 +45,19 @@ pub async fn execute_sessions_tool(
         "cancel" => SessionAction::Cancel,
         "pause" => SessionAction::Pause,
         "resume" => SessionAction::Resume,
-        _ => return Err(anyhow!("Unknown action: {}", action_str)),
+        _ => {
+            return Err(session_tool_error(
+                "SESSIONS_ACTION_UNKNOWN",
+                format!("Unknown action: {}", action_str),
+            ));
+        }
     };
 
     match action {
         SessionAction::Spawn => {
             let task = tool_call["task"]
                 .as_str()
-                .ok_or_else(|| anyhow!("Missing 'task' field"))?
+                .ok_or_else(|| session_tool_error("SESSIONS_TASK_MISSING", "Missing 'task' field"))?
                 .to_string();
 
             let label = tool_call["label"].as_str().map(|s| s.to_string());
@@ -126,20 +132,71 @@ pub async fn execute_sessions_tool(
             let session_id = tool_call["session_id"]
                 .as_str()
                 .or_else(|| tool_call["sessionId"].as_str())
-                .ok_or_else(|| anyhow!("Missing 'session_id' field"))?;
+                .ok_or_else(|| {
+                    session_tool_error("SESSIONS_SESSION_ID_MISSING", "Missing 'session_id' field")
+                })?;
 
-            let session = agent_manager
-                .get_session(session_id)
-                .await
-                .ok_or_else(|| anyhow!("Session not found: {}", session_id))?;
+            let session = agent_manager.get_session(session_id).await.ok_or_else(|| {
+                session_tool_error(
+                    "SESSIONS_NOT_FOUND",
+                    format!("Session not found: {}", session_id),
+                )
+            })?;
 
             Ok(serde_json::to_string(&json!({ "session": session }))?)
+        }
+        SessionAction::Send => {
+            let session_id = tool_call["session_id"]
+                .as_str()
+                .or_else(|| tool_call["sessionId"].as_str())
+                .ok_or_else(|| {
+                    session_tool_error("SESSIONS_SESSION_ID_MISSING", "Missing 'session_id' field")
+                })?;
+            let message = tool_call["message"].as_str().ok_or_else(|| {
+                session_tool_error("SESSIONS_MESSAGE_MISSING", "Missing 'message' field")
+            })?;
+
+            agent_manager
+                .broadcast_to_session(session_id, message.to_string())
+                .await?;
+
+            Ok(serde_json::to_string(&json!({
+                "status": "sent",
+                "session_id": session_id,
+            }))?)
+        }
+        SessionAction::History => {
+            let session_id = tool_call["session_id"]
+                .as_str()
+                .or_else(|| tool_call["sessionId"].as_str())
+                .ok_or_else(|| {
+                    session_tool_error("SESSIONS_SESSION_ID_MISSING", "Missing 'session_id' field")
+                })?;
+
+            let store = persistence.ok_or_else(|| {
+                session_tool_error(
+                    "SESSIONS_PERSISTENCE_UNAVAILABLE",
+                    "Persistence manager not initialized.",
+                )
+            })?;
+            let history = store.get_history(session_id)?;
+            let rendered = history
+                .into_iter()
+                .map(message_to_simple)
+                .collect::<Vec<_>>();
+
+            Ok(serde_json::to_string(&json!({
+                "session_id": session_id,
+                "messages": rendered,
+            }))?)
         }
         SessionAction::Cancel => {
             let session_id = tool_call["session_id"]
                 .as_str()
                 .or_else(|| tool_call["sessionId"].as_str())
-                .ok_or_else(|| anyhow!("Missing 'session_id' field"))?;
+                .ok_or_else(|| {
+                    session_tool_error("SESSIONS_SESSION_ID_MISSING", "Missing 'session_id' field")
+                })?;
 
             agent_manager.cancel_session(session_id).await?;
 
@@ -152,7 +209,9 @@ pub async fn execute_sessions_tool(
             let session_id = tool_call["session_id"]
                 .as_str()
                 .or_else(|| tool_call["sessionId"].as_str())
-                .ok_or_else(|| anyhow!("Missing 'session_id' field"))?;
+                .ok_or_else(|| {
+                    session_tool_error("SESSIONS_SESSION_ID_MISSING", "Missing 'session_id' field")
+                })?;
 
             agent_manager.pause_session(session_id).await?;
 
@@ -165,7 +224,9 @@ pub async fn execute_sessions_tool(
             let session_id = tool_call["session_id"]
                 .as_str()
                 .or_else(|| tool_call["sessionId"].as_str())
-                .ok_or_else(|| anyhow!("Missing 'session_id' field"))?;
+                .ok_or_else(|| {
+                    session_tool_error("SESSIONS_SESSION_ID_MISSING", "Missing 'session_id' field")
+                })?;
 
             agent_manager.resume_session(session_id).await?;
 
@@ -174,9 +235,43 @@ pub async fn execute_sessions_tool(
                 "session_id": session_id,
             }))?)
         }
-        _ => {
-            // Stub for unimplemented actions
-            Err(anyhow!("Action '{}' not yet implemented", action_str))
+    }
+}
+
+fn session_tool_error(code: &str, message: impl Into<String>) -> anyhow::Error {
+    let message = message.into();
+    anyhow::anyhow!(
+        "{}",
+        json!({
+            "status": "error",
+            "code": code,
+            "message": message,
+        })
+    )
+}
+
+fn message_to_simple(msg: rig::completion::Message) -> serde_json::Value {
+    use rig::completion::message::{AssistantContent, UserContent};
+    match msg {
+        rig::completion::Message::User { content } => {
+            let text = content
+                .iter()
+                .find_map(|c| match c {
+                    UserContent::Text(t) => Some(t.text.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            json!({ "role": "user", "content": text })
+        }
+        rig::completion::Message::Assistant { content, .. } => {
+            let text = content
+                .iter()
+                .find_map(|c| match c {
+                    AssistantContent::Text(t) => Some(t.text.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            json!({ "role": "assistant", "content": text })
         }
     }
 }

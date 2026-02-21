@@ -29,8 +29,11 @@ async fn main() {
     let monitor = nanobot_core::system::resources::ResourceMonitor::new();
     let usage = monitor.get_usage();
     println!("   ✅ CPU Usage: {}%", usage.cpu_usage_percent);
-    println!("   ✅ RAM Usage: {} MB / {} MB", usage.used_memory_mb, usage.total_memory_mb);
-    
+    println!(
+        "   ✅ RAM Usage: {} MB / {} MB",
+        usage.used_memory_mb, usage.total_memory_mb
+    );
+
     if usage.total_memory_mb > 0 {
         println!("   ✅ Resource Monitor is reading system stats.");
     } else {

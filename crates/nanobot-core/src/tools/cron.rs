@@ -128,6 +128,9 @@ pub async fn execute_cron_tool(scheduler: &CronScheduler, tool_call: &Value) -> 
                 &json!({ "id": job_id, "created": true }),
             )?)
         }
+        CronAction::Update => Err(anyhow!(
+            "Cron action 'update' is not implemented yet; remove and re-add the job"
+        )),
         CronAction::Remove => {
             let job_id = tool_call["jobId"]
                 .as_str()
@@ -137,9 +140,62 @@ pub async fn execute_cron_tool(scheduler: &CronScheduler, tool_call: &Value) -> 
             scheduler.remove_job(job_id)?;
             Ok(json!({ "removed": true }).to_string())
         }
-        _ => {
-            // Stub for unimplemented actions
-            Err(anyhow!("Action '{}' not yet implemented", action_str))
+        CronAction::Run => {
+            let job_id = tool_call["jobId"]
+                .as_str()
+                .or_else(|| tool_call["id"].as_str())
+                .ok_or_else(|| anyhow!("Missing 'jobId' or 'id'"))?;
+            scheduler.trigger_job_now(job_id).await?;
+            Ok(json!({ "status": "queued", "jobId": job_id, "manual": true }).to_string())
+        }
+        CronAction::Runs => {
+            let job_id = tool_call["jobId"]
+                .as_str()
+                .or_else(|| tool_call["id"].as_str())
+                .ok_or_else(|| anyhow!("Missing 'jobId' or 'id'"))?;
+            let limit = tool_call["limit"].as_u64().unwrap_or(20) as usize;
+            let entries = scheduler.job_runs(job_id, limit)?;
+            Ok(json!({
+                "jobId": job_id,
+                "count": entries.len(),
+                "runs": entries,
+            })
+            .to_string())
+        }
+        CronAction::Wake => {
+            let text = if let Some(checks) = tool_call.get("checks").and_then(|v| v.as_array()) {
+                let mut lines = Vec::new();
+                for c in checks {
+                    if let Some(s) = c.as_str() {
+                        lines.push(format!("- {}", s));
+                    }
+                }
+                if lines.is_empty() {
+                    tool_call["text"]
+                        .as_str()
+                        .ok_or_else(|| anyhow!("Missing 'text' or non-empty 'checks'"))?
+                        .to_string()
+                } else {
+                    format!(
+                        "Heartbeat batch request:\n{}\n\nExecute all checks in a single turn and return concise results.",
+                        lines.join("\n")
+                    )
+                }
+            } else {
+                tool_call["text"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("Missing 'text'"))?
+                    .to_string()
+            };
+            let mode = tool_call["mode"].as_str().unwrap_or("now");
+            scheduler.wake_now(text.clone()).await?;
+            Ok(json!({
+                "status": "queued",
+                "action": "wake",
+                "mode": mode,
+                "text": text,
+            })
+            .to_string())
         }
     }
 }

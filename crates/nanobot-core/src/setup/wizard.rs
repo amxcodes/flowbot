@@ -1,6 +1,7 @@
 use anyhow::Result;
 use console::style;
-use dialoguer::{Confirm, Input, MultiSelect, Select, Password, theme::ColorfulTheme};
+use dialoguer::{Confirm, Input, MultiSelect, Password, Select, theme::ColorfulTheme};
+use std::fs;
 use std::path::PathBuf;
 
 use super::{SetupOptions, templates::Personality, workspace_mgmt};
@@ -39,15 +40,15 @@ pub struct SetupResult {
 
 pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
     print_welcome_banner();
-    
+
     // Security warning (like OpenClaw)
     print_security_warning();
-    
+
     let understood = Confirm::with_theme(&ColorfulTheme::default())
         .with_prompt("I understand this is powerful and inherently risky. Continue?")
         .default(true)
         .interact()?;
-    
+
     if !understood {
         println!("{}", style("Setup cancelled.").yellow());
         return Ok(SetupResult {
@@ -64,7 +65,7 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
             should_start_webchat: false,
             should_start_server: false,
             web_port: 3000,
-            server_port: 3000,
+            server_port: 18789,
             teams_webhook: None,
             google_chat_webhook: None,
             workspace_dir: PathBuf::from("."),
@@ -211,38 +212,12 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
         _ => crate::config::DmScope::PerChannelPeer,
     };
 
-    // 4b. Admin token setup
+    // 4b. Admin auth strategy
     println!();
-    if quick_mode {
-        let token = uuid::Uuid::new_v4().to_string();
-        crate::security::write_admin_token(token.trim())?;
-        let masked = if token.len() > 8 {
-            format!("{}...{}", &token[..4], &token[token.len() - 4..])
-        } else {
-            "****".to_string()
-        };
-        println!("{} {}", style("✅ Admin token saved:").green().bold(), masked);
-        println!("{}", style("You can change it later with: nanobot admin-token set").dim());
-    } else {
-        let set_admin_token = Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt("Set admin token for /eval and admin actions?")
-            .default(true)
-            .interact()?;
-
-        if set_admin_token {
-            let token = Password::with_theme(&ColorfulTheme::default())
-                .with_prompt("Enter admin token")
-                .with_confirmation("Confirm admin token", "Tokens do not match")
-                .interact()?;
-
-            if !token.trim().is_empty() {
-                crate::security::write_admin_token(token.trim())?;
-                println!("{}", style("✅ Admin token saved").green().bold());
-            } else {
-                println!("{}", style("⚠️  Admin token not set").yellow());
-            }
-        }
-    }
+    println!(
+        "{}",
+        style("ℹ️  Admin auth will use your primary password by default.").dim()
+    );
 
     // 4c. Session secrets setup
     println!();
@@ -271,33 +246,68 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
         }
     }
 
-    // 4d. Web chat password setup
-    if channels.contains(&"Web Chat (Browser)".to_string()) {
-        println!();
-        if quick_mode {
-            let password = uuid::Uuid::new_v4().to_string();
-            crate::security::write_web_password(&password)?;
-            println!("{} {}", style("✅ Web chat password:").green().bold(), password);
-            println!("{}", style("Save this password; you will need it to log in.").dim());
-        } else {
-            let set_web_password = Confirm::with_theme(&ColorfulTheme::default())
-                .with_prompt("Set Web Chat login password?")
-                .default(true)
-                .interact()?;
+    // 4d. Unified primary password (Web login + encrypted secrets)
+    println!();
+    let set_primary_password = if quick_mode {
+        true
+    } else {
+        Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Set one primary password (Web login + Secrets Vault)?")
+            .default(true)
+            .interact()?
+    };
 
-            if set_web_password {
-                let password = Password::with_theme(&ColorfulTheme::default())
-                    .with_prompt("Enter Web Chat password")
-                    .with_confirmation("Confirm password", "Passwords do not match")
-                    .interact()?;
+    if set_primary_password {
+        let password = Password::with_theme(&ColorfulTheme::default())
+            .with_prompt("Enter primary password")
+            .with_confirmation("Confirm password", "Passwords do not match")
+            .interact()?;
 
-                if !password.trim().is_empty() {
-                    crate::security::write_web_password(password.trim())?;
-                    println!("{}", style("✅ Web chat password saved").green().bold());
-                } else {
-                    println!("{}", style("⚠️  Web chat password not set").yellow());
+        if !password.trim().is_empty() {
+            crate::security::write_web_password(password.trim())?;
+            println!("{}", style("✅ Web login password saved").green().bold());
+
+            crate::security::write_admin_token(password.trim())?;
+            println!(
+                "{}",
+                style("✅ Admin token synced to primary password")
+                    .green()
+                    .bold()
+            );
+
+            match crate::security::setup_master_password_if_missing(password.trim()) {
+                Ok(true) => {
+                    println!(
+                        "{}",
+                        style("✅ Secrets vault password initialized")
+                            .green()
+                            .bold()
+                    );
+                }
+                Ok(false) => {
+                    println!(
+                        "{}",
+                        style(
+                            "ℹ️  Secrets vault already configured; keeping existing master password"
+                        )
+                        .dim()
+                    );
+                }
+                Err(e) => {
+                    println!(
+                        "{} {}",
+                        style("⚠️  Could not initialize secrets vault:").yellow(),
+                        e
+                    );
                 }
             }
+        } else {
+            println!("{}", style("⚠️  Primary password not set").yellow());
+            println!(
+                "{}",
+                style("⚠️  Admin actions will require a separate admin token until primary password is set.")
+                    .yellow()
+            );
         }
     }
 
@@ -341,21 +351,29 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
 
     let server_port = if channels.contains(&"WebSocket API".to_string()) {
         if quick_mode {
-            3000
+            18789
         } else {
             Input::<u16>::with_theme(&ColorfulTheme::default())
                 .with_prompt("WebSocket API port")
-                .default(3000)
+                .default(18789)
                 .interact()?
         }
     } else {
-        3000
+        18789
     };
 
     // 5. Provider Selection (new section like OpenClaw)
     println!();
-    println!("{}", style("Model/Auth Provider Configuration").bold().cyan());
-    let provider_options = vec!["Google Antigravity (OAuth)", "OpenAI", "OpenRouter", "Skip for now"];
+    println!(
+        "{}",
+        style("Model/Auth Provider Configuration").bold().cyan()
+    );
+    let provider_options = vec![
+        "Google Antigravity (OAuth)",
+        "OpenAI",
+        "OpenRouter",
+        "Skip for now",
+    ];
     let provider_idx = if quick_mode {
         let use_oauth = Confirm::with_theme(&ColorfulTheme::default())
             .with_prompt("Connect Google Antigravity (recommended)?")
@@ -369,10 +387,10 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
             .default(0)
             .interact()?
     };
-    
+
     let (should_run_oauth, oauth_provider) = match provider_idx {
         0 => (true, Some("antigravity".to_string())),
-        1 | 2 | 3 => (false, None),
+        1..=3 => (false, None),
         _ => (false, None),
     };
 
@@ -404,6 +422,15 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
             .interact()?
     };
 
+    let warm_embedding_cache = if quick_mode {
+        true
+    } else {
+        Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Pre-download local embedding model now? (avoids first-use delay)")
+            .default(true)
+            .interact()?
+    };
+
     // 8. Confirm setup
     println!();
     println!("{}", style("Setup Summary:").bold().cyan());
@@ -423,13 +450,52 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
         }
     );
     println!("  Provider: {}", provider_options[provider_idx]);
-    println!("  Service: {}", if should_install_service { "Yes" } else { "No" });
+    println!(
+        "  Service: {}",
+        if should_install_service { "Yes" } else { "No" }
+    );
     println!("  DM isolation: {}", dm_options[dm_idx]);
     println!("  Offline speech: {}", offline_options[offline_choice]);
-    println!("  Web Chat: {}", if channels.contains(&"Web Chat (Browser)".to_string()) { "Yes" } else { "No" });
-    println!("  WebSocket API: {}", if channels.contains(&"WebSocket API".to_string()) { "Yes" } else { "No" });
-    println!("  Teams webhook: {}", if channels.contains(&"Teams (Webhook)".to_string()) { "Yes" } else { "No" });
-    println!("  Google Chat webhook: {}", if channels.contains(&"Google Chat (Webhook)".to_string()) { "Yes" } else { "No" });
+    println!(
+        "  Local embeddings: {}",
+        if warm_embedding_cache {
+            "Pre-download now"
+        } else {
+            "Download on first use"
+        }
+    );
+    println!(
+        "  Web Chat: {}",
+        if channels.contains(&"Web Chat (Browser)".to_string()) {
+            "Yes"
+        } else {
+            "No"
+        }
+    );
+    println!(
+        "  WebSocket API: {}",
+        if channels.contains(&"WebSocket API".to_string()) {
+            "Yes"
+        } else {
+            "No"
+        }
+    );
+    println!(
+        "  Teams webhook: {}",
+        if channels.contains(&"Teams (Webhook)".to_string()) {
+            "Yes"
+        } else {
+            "No"
+        }
+    );
+    println!(
+        "  Google Chat webhook: {}",
+        if channels.contains(&"Google Chat (Webhook)".to_string()) {
+            "Yes"
+        } else {
+            "No"
+        }
+    );
     if channels.contains(&"Web Chat (Browser)".to_string()) {
         println!("  Web Chat port: {}", web_port);
     }
@@ -467,11 +533,9 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
     }
 
     // 9. Create workspace
-    let workspace_dir = opts.workspace_dir.unwrap_or_else(|| {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".nanobot")
-    });
+    let workspace_dir = opts
+        .workspace_dir
+        .unwrap_or_else(crate::workspace::resolve_workspace_dir);
 
     println!();
     println!("{}", style("Creating workspace...").bold());
@@ -494,34 +558,70 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
         println!();
         super::telegram::run_telegram_setup_wizard().await?;
     }
-    
+
     if channels.contains(&"Discord".to_string()) {
         println!();
         super::discord::run_discord_setup_wizard().await?;
     }
-    
+
     if channels.contains(&"Slack".to_string()) {
         println!();
         super::slack::run_slack_setup_wizard().await?;
     }
 
     println!();
-    println!("{}", style("✅ Workspace created successfully!").green().bold());
+    println!(
+        "{}",
+        style("✅ Workspace created successfully!").green().bold()
+    );
 
     if offline_choice == 0 {
         println!();
-        println!("{}", style("Installing offline speech components...").bold().cyan());
+        println!(
+            "{}",
+            style("Installing offline speech components...")
+                .bold()
+                .cyan()
+        );
         if let Err(err) = super::offline_models::run_offline_models_installer().await {
-            println!("{} {}", style("⚠️  Offline installer failed:").yellow(), err);
-            println!("Run later with: {}", style("nanobot setup --offline-models").green());
+            println!(
+                "{} {}",
+                style("⚠️  Offline installer failed:").yellow(),
+                err
+            );
+            println!(
+                "Run later with: {}",
+                style("nanobot setup --offline-models").green()
+            );
         }
     } else if offline_choice == 1 {
         println!();
         println!(
             "{}",
-            style("You can install offline speech models later with: nanobot setup --offline-models")
-                .dim()
+            style(
+                "You can install offline speech models later with: nanobot setup --offline-models"
+            )
+            .dim()
         );
+    }
+
+    if warm_embedding_cache {
+        maybe_update_gitignore_for_runtime_caches();
+        println!();
+        println!("{}", style("Preparing local embedding model cache...").bold().cyan());
+        match preload_local_embeddings().await {
+            Ok(_) => println!(
+                "{}",
+                style("✅ Local embedding cache is ready").green().bold()
+            ),
+            Err(err) => {
+                println!("{} {}", style("⚠️  Could not pre-download embeddings:").yellow(), err);
+                println!(
+                    "{}",
+                    style("This is optional; Nanobot will download on first embedding use.").dim()
+                );
+            }
+        }
     }
 
     // Quick start
@@ -531,25 +631,37 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
     println!("     {}", style("nanobot gateway --channel all").green());
     if channels.contains(&"Web Chat (Browser)".to_string()) {
         println!("  2) Start Web Chat (browser UI):");
-        println!("     {}", style(format!("nanobot webchat --port {}", web_port)).green());
-        println!("     {}", style(format!("Open: http://localhost:{}", web_port)).dim());
+        println!(
+            "     {}",
+            style(format!("nanobot webchat --port {}", web_port)).green()
+        );
+        println!(
+            "     {}",
+            style(format!("Open: http://localhost:{}", web_port)).dim()
+        );
         if let Some(ip) = get_local_ip() {
-            println!("     {}", style(format!("Open on LAN: http://{}:{}", ip, web_port)).dim());
+            println!(
+                "     {}",
+                style(format!("Open on LAN: http://{}:{}", ip, web_port)).dim()
+            );
         }
     }
     println!("  3) Start WebSocket API:");
-    println!("     {}", style(format!("nanobot server --port {}", server_port)).green());
+    println!(
+        "     {}",
+        style(format!("nanobot server --port {}", server_port)).green()
+    );
     println!();
     println!("{}", style("Tip:").dim());
     println!("  If you installed the service, it already runs 24x7.");
-    
+
     // 11. Show pairing system explanation
     if !channels.is_empty() {
-        use super::channel_instructions::{print_pairing_explanation, print_channel_status};
-        
+        use super::channel_instructions::{print_channel_status, print_pairing_explanation};
+
         println!();
         print_pairing_explanation();
-        
+
         // Show channels status
         let mut channel_statuses = vec![];
         for channel in &channels {
@@ -557,11 +669,11 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
         }
         print_channel_status(&channel_statuses);
     }
-    
+
     // 12. Auto-gateway option
-    let has_messaging_channels = channels.iter().any(|c| {
-        c == "Telegram" || c == "Discord" || c == "Slack"
-    });
+    let has_messaging_channels = channels
+        .iter()
+        .any(|c| c == "Telegram" || c == "Discord" || c == "Slack");
     let should_start_gateway = if has_messaging_channels {
         if quick_mode {
             true
@@ -577,7 +689,7 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
     } else {
         false
     };
-    
+
     // 13. Prompt for TUI hatch
     let should_hatch_tui = if !should_start_gateway {
         println!();
@@ -627,12 +739,10 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
         } else {
             0
         }
+    } else if docker_available {
+        1
     } else {
-        if docker_available {
-            1
-        } else {
-            0
-        }
+        0
     };
 
     let browser_idx = Select::with_theme(&ColorfulTheme::default())
@@ -658,8 +768,10 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
         if !docker_available {
             println!(
                 "{}",
-                style("Docker was not detected. Install Docker or switch to local browser mode later.")
-                    .yellow()
+                style(
+                    "Docker was not detected. Install Docker or switch to local browser mode later."
+                )
+                .yellow()
             );
         }
     } else if enable_browser {
@@ -766,6 +878,75 @@ fn print_security_warning() {
     println!("  - Keep secrets out of the workspace");
     println!("  - Use the strongest available model");
     println!();
+}
+
+async fn preload_local_embeddings() -> Result<()> {
+    use tokio::time::{Duration, timeout};
+
+    let warmup = async {
+        let provider = crate::memory::EmbeddingProvider::local()?;
+        let _ = provider.embed(vec!["nanobot warmup embedding cache"]).await?;
+        Ok::<(), anyhow::Error>(())
+    };
+
+    match timeout(Duration::from_secs(90), warmup).await {
+        Ok(result) => result,
+        Err(_) => Err(anyhow::anyhow!(
+            "embedding model warmup timed out (will download on first use instead)"
+        )),
+    }
+}
+
+fn maybe_update_gitignore_for_runtime_caches() {
+    let Ok(cwd) = std::env::current_dir() else {
+        return;
+    };
+    let Some(repo_root) = find_repo_root(&cwd) else {
+        return;
+    };
+
+    let gitignore_path = repo_root.join(".gitignore");
+    let existing = fs::read_to_string(&gitignore_path).unwrap_or_default();
+    let required_entries = [
+        ".fastembed_cache/",
+        "crates/nanobot-core/.fastembed_cache/",
+    ];
+
+    let mut additions = Vec::new();
+    for entry in required_entries {
+        if !existing.lines().any(|line| line.trim() == entry) {
+            additions.push(entry);
+        }
+    }
+
+    if additions.is_empty() {
+        return;
+    }
+
+    let mut updated = existing;
+    if !updated.ends_with('\n') && !updated.is_empty() {
+        updated.push('\n');
+    }
+    if !updated.is_empty() {
+        updated.push('\n');
+    }
+    updated.push_str("# Runtime embedding caches\n");
+    for entry in additions {
+        updated.push_str(entry);
+        updated.push('\n');
+    }
+
+    let _ = fs::write(gitignore_path, updated);
+}
+
+fn find_repo_root(start: &std::path::Path) -> Option<PathBuf> {
+    for dir in start.ancestors() {
+        let git_path = dir.join(".git");
+        if git_path.exists() {
+            return Some(dir.to_path_buf());
+        }
+    }
+    None
 }
 
 // Completion message helper removed (unused).

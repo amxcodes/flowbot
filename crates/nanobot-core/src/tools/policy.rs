@@ -148,10 +148,10 @@ impl ToolPolicy {
         }
 
         // If allowlist exists, check if tool is in it
-        if let Some(ref allowed) = self.allowed_tools {
-            if !allowed.contains(tool_name) {
-                return Err(PolicyViolation::ToolNotAllowed(tool_name.to_string()));
-            }
+        if let Some(ref allowed) = self.allowed_tools
+            && !allowed.contains(tool_name)
+        {
+            return Err(PolicyViolation::ToolNotAllowed(tool_name.to_string()));
         }
 
         // Check if approval is required
@@ -211,10 +211,10 @@ impl ToolPolicy {
 
     /// Check if a command is allowed for execution
     pub fn check_command_allowed(&self, command: &str) -> Result<(), PolicyViolation> {
-        if let Some(ref allowed) = self.allowed_commands {
-            if !allowed.contains(command) {
-                return Err(PolicyViolation::CommandNotAllowed(command.to_string()));
-            }
+        if let Some(ref allowed) = self.allowed_commands
+            && !allowed.contains(command)
+        {
+            return Err(PolicyViolation::CommandNotAllowed(command.to_string()));
         }
 
         Ok(())
@@ -229,6 +229,42 @@ impl ToolPolicy {
             });
         }
         Ok(())
+    }
+
+    /// Production-oriented default: broad functionality with explicit approvals
+    /// for high-risk operations.
+    pub fn ask_me_default() -> Self {
+        Self::permissive()
+            .require_approval("run_command")
+            .require_approval("spawn_process")
+            .require_approval("bash")
+            .require_approval("exec")
+            .require_approval("apply_patch")
+            .require_approval("browser_navigate")
+            .require_approval("browser_click")
+            .require_approval("browser_type")
+            .require_approval("browser_screenshot")
+            .require_approval("browser_evaluate")
+            .require_approval("browser_pdf")
+            .require_approval("browser_list_tabs")
+            .require_approval("browser_switch_tab")
+    }
+
+    /// Headless deny profile: block command and browser execution entirely.
+    pub fn headless_deny_default() -> Self {
+        Self::permissive()
+            .deny_tool("run_command")
+            .deny_tool("spawn_process")
+            .deny_tool("bash")
+            .deny_tool("exec")
+            .deny_tool("browser_navigate")
+            .deny_tool("browser_click")
+            .deny_tool("browser_type")
+            .deny_tool("browser_screenshot")
+            .deny_tool("browser_evaluate")
+            .deny_tool("browser_pdf")
+            .deny_tool("browser_list_tabs")
+            .deny_tool("browser_switch_tab")
     }
 }
 

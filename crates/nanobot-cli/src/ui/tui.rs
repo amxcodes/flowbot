@@ -11,10 +11,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, Paragraph},
 };
-use std::{
-    io,
-    time::Duration,
-};
+use std::{io, time::Duration};
 
 pub struct TuiManager {
     terminal: Terminal<CrosstermBackend<io::Stdout>>,
@@ -110,12 +107,11 @@ impl TuiManager {
         loop {
             self.draw()?;
 
-            if event::poll(Duration::from_millis(100))? {
-                if let Event::Key(_key) = event::read()? {
-                    if let Some(result) = self.handle_event(Event::Key(_key))? {
-                        return Ok(Some(result));
-                    }
-                }
+            if event::poll(Duration::from_millis(100))?
+                && let Event::Key(_key) = event::read()?
+                && let Some(result) = self.handle_event(Event::Key(_key))?
+            {
+                return Ok(Some(result));
             }
         }
     }
@@ -131,22 +127,20 @@ impl TuiManager {
                     return Ok(Some("/quit".to_string()));
                 }
                 KeyCode::Up => {
-                    if !self.input_history.is_empty() {
-                        if self.history_index > 0 {
-                            self.history_index -= 1;
-                            self.input_buffer = self.input_history[self.history_index].clone();
-                        }
+                    if !self.input_history.is_empty() && self.history_index > 0 {
+                        self.history_index -= 1;
+                        self.input_buffer = self.input_history[self.history_index].clone();
                     }
                 }
                 KeyCode::Down => {
-                    if !self.input_history.is_empty() {
-                        if self.history_index < self.input_history.len() {
-                            self.history_index += 1;
-                            if self.history_index == self.input_history.len() {
-                                self.input_buffer.clear();
-                            } else {
-                                self.input_buffer = self.input_history[self.history_index].clone();
-                            }
+                    if !self.input_history.is_empty()
+                        && self.history_index < self.input_history.len()
+                    {
+                        self.history_index += 1;
+                        if self.history_index == self.input_history.len() {
+                            self.input_buffer.clear();
+                        } else {
+                            self.input_buffer = self.input_history[self.history_index].clone();
                         }
                     }
                 }

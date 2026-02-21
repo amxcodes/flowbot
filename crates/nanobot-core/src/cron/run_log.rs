@@ -66,7 +66,7 @@ pub fn append_run_log(
     let reader = BufReader::new(file);
     let lines: Vec<String> = reader
         .lines()
-        .filter_map(|l| l.ok())
+        .map_while(Result::ok)
         .filter(|l| !l.trim().is_empty())
         .collect();
 
@@ -109,7 +109,7 @@ pub fn read_run_log(file_path: &Path, limit: usize) -> Result<Vec<CronRunEntry>>
     let mut entries = Vec::new();
     let lines: Vec<String> = reader
         .lines()
-        .filter_map(|l| l.ok())
+        .map_while(Result::ok)
         .filter(|l| !l.trim().is_empty())
         .collect();
 

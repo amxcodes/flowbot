@@ -8,6 +8,44 @@ use super::types::{ServiceRuntime, ServiceStatus};
 
 const SERVICE_NAME: &str = "nanobot";
 
+fn parse_systemd_uptime_seconds(stdout: &str) -> Option<u64> {
+    // Example: Active: active (running) since ...; 2h 3min ago
+    let active_line = stdout.lines().find(|line| line.contains("Active:"))?;
+    let (_, tail) = active_line.split_once(';')?;
+    let human = tail
+        .trim()
+        .strip_suffix(" ago")
+        .unwrap_or(tail.trim())
+        .to_ascii_lowercase();
+
+    let mut total = 0u64;
+    for part in human.split_whitespace() {
+        if let Some(v) = part.strip_suffix("ms") {
+            if let Ok(ms) = v.parse::<u64>() {
+                total = total.saturating_add(ms / 1000);
+            }
+        } else if let Some(v) = part.strip_suffix('s') {
+            if let Ok(sec) = v.parse::<u64>() {
+                total = total.saturating_add(sec);
+            }
+        } else if let Some(v) = part.strip_suffix("min") {
+            if let Ok(min) = v.parse::<u64>() {
+                total = total.saturating_add(min.saturating_mul(60));
+            }
+        } else if let Some(v) = part.strip_suffix('h') {
+            if let Ok(hour) = v.parse::<u64>() {
+                total = total.saturating_add(hour.saturating_mul(3600));
+            }
+        } else if let Some(v) = part.strip_suffix('d')
+            && let Ok(day) = v.parse::<u64>()
+        {
+            total = total.saturating_add(day.saturating_mul(86400));
+        }
+    }
+
+    if total > 0 { Some(total) } else { None }
+}
+
 /// Get the systemd user service directory
 fn get_service_dir() -> Result<PathBuf> {
     let home = std::env::var("HOME").context("HOME environment variable not set")?;
@@ -53,6 +91,75 @@ WantedBy=default.target
     )
 }
 
+fn current_username() -> Option<String> {
+    if let Ok(user) = std::env::var("USER") {
+        let trimmed = user.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    let output = Command::new("id").args(["-un"]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let user = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if user.is_empty() { None } else { Some(user) }
+}
+
+fn ensure_linger_enabled_if_possible() {
+    let Some(user) = current_username() else {
+        println!("⚠️  Could not determine current user for linger check.");
+        return;
+    };
+
+    let show = Command::new("loginctl")
+        .args(["show-user", &user, "-p", "Linger"])
+        .output();
+
+    let Ok(show) = show else {
+        println!(
+            "ℹ️  'loginctl' not available. If service stops after logout, enable linger manually."
+        );
+        return;
+    };
+
+    if show.status.success() {
+        let out = String::from_utf8_lossy(&show.stdout).to_ascii_lowercase();
+        if out.contains("linger=yes") {
+            println!("✅ systemd linger already enabled for user '{}'", user);
+            return;
+        }
+    }
+
+    let enable = Command::new("loginctl")
+        .args(["enable-linger", &user])
+        .output();
+
+    match enable {
+        Ok(res) if res.status.success() => {
+            println!("✅ Enabled systemd linger for user '{}'", user);
+        }
+        Ok(res) => {
+            println!(
+                "⚠️  Could not enable linger automatically: {}",
+                String::from_utf8_lossy(&res.stderr).trim()
+            );
+            println!(
+                "   Run manually if needed: sudo loginctl enable-linger {}",
+                user
+            );
+        }
+        Err(_) => {
+            println!(
+                "ℹ️  Could not run 'loginctl enable-linger'. If service stops after logout, run: sudo loginctl enable-linger {}",
+                user
+            );
+        }
+    }
+}
+
 /// Install the systemd service
 pub fn install() -> Result<()> {
     let exe_path = std::env::current_exe().context("Failed to get current executable path")?;
@@ -89,11 +196,28 @@ pub fn install() -> Result<()> {
 
     println!("✅ Systemd daemon reloaded");
     println!();
+
+    let enable_output = Command::new("systemctl")
+        .args(["--user", "enable", SERVICE_NAME])
+        .output()
+        .context("Failed to enable service")?;
+
+    if !enable_output.status.success() {
+        anyhow::bail!(
+            "Failed to enable service: {}",
+            String::from_utf8_lossy(&enable_output.stderr)
+        );
+    }
+
+    println!("✅ Service enabled for auto-start");
+    println!();
+
+    ensure_linger_enabled_if_possible();
+    println!();
+
     println!("Service installed successfully!");
     println!("To start the service:");
     println!("  nanobot service start");
-    println!("To enable auto-start on boot:");
-    println!("  systemctl --user enable {}", SERVICE_NAME);
 
     Ok(())
 }
@@ -221,7 +345,7 @@ pub fn status() -> Result<ServiceRuntime> {
     Ok(ServiceRuntime {
         status,
         pid,
-        uptime_seconds: None, // TODO: Parse from systemd output
+        uptime_seconds: parse_systemd_uptime_seconds(&stdout),
         last_exit_code: None,
         last_exit_reason: None,
     })

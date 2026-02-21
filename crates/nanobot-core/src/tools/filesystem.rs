@@ -10,12 +10,12 @@ const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10MB limit
 
 /// Arguments for reading a file
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReadFileArgs {
+pub(super) struct ReadFileArgs {
     pub path: String,
 }
 
 /// Read a file and return its contents
-pub async fn read_file(args: ReadFileArgs) -> Result<String> {
+pub(super) async fn read_file(_token: &super::ExecutorToken, args: ReadFileArgs) -> Result<String> {
     let path = validate_path(&args.path)?;
 
     // Check file exists
@@ -45,7 +45,7 @@ pub async fn read_file(args: ReadFileArgs) -> Result<String> {
 
 /// Arguments for writing a file
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WriteFileArgs {
+pub(super) struct WriteFileArgs {
     pub path: String,
     pub content: String,
     #[serde(default)]
@@ -53,7 +53,7 @@ pub struct WriteFileArgs {
 }
 
 /// Write content to a file
-pub async fn write_file(args: WriteFileArgs) -> Result<String> {
+pub(super) async fn write_file(_token: &super::ExecutorToken, args: WriteFileArgs) -> Result<String> {
     let path = validate_path(&args.path)?;
 
     // Check if file exists and overwrite flag
@@ -81,7 +81,7 @@ pub async fn write_file(args: WriteFileArgs) -> Result<String> {
 
 /// Arguments for editing a file (find and replace)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EditFileArgs {
+pub(super) struct EditFileArgs {
     pub path: String,
     pub old_text: String,
     pub new_text: String,
@@ -90,7 +90,7 @@ pub struct EditFileArgs {
 }
 
 /// Edit a file by finding and replacing text
-pub async fn edit_file(args: EditFileArgs) -> Result<String> {
+pub(super) async fn edit_file(_token: &super::ExecutorToken, args: EditFileArgs) -> Result<String> {
     let path = validate_path(&args.path)?;
 
     // Read file
@@ -128,14 +128,14 @@ pub async fn edit_file(args: EditFileArgs) -> Result<String> {
 
 /// Arguments for listing a directory
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ListDirArgs {
+pub(super) struct ListDirArgs {
     pub path: String,
     #[serde(default)]
     pub max_depth: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileInfo {
+pub(super) struct FileInfo {
     pub path: String,
     pub name: String,
     pub is_dir: bool,
@@ -168,7 +168,12 @@ pub enum PatchOperation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApplyPatchArgs {
+pub(super) struct ApplyPatchArgs {
+    #[serde(default)]
+    pub patch: Option<String>,
+    #[serde(default)]
+    pub patch_text: Option<String>,
+    #[serde(default)]
     pub operations: Vec<PatchOperation>,
     #[serde(default)]
     pub dry_run: bool,
@@ -177,7 +182,7 @@ pub struct ApplyPatchArgs {
 }
 
 /// List files in a directory
-pub async fn list_directory(args: ListDirArgs) -> Result<Vec<FileInfo>> {
+pub(super) async fn list_directory(_token: &super::ExecutorToken, args: ListDirArgs) -> Result<Vec<FileInfo>> {
     let path = validate_path(&args.path)?;
 
     if !path.exists() {
@@ -239,9 +244,25 @@ pub async fn list_directory(args: ListDirArgs) -> Result<Vec<FileInfo>> {
 }
 
 /// Apply structured patch operations (add/update/delete)
-pub async fn apply_patch(args: ApplyPatchArgs) -> Result<String> {
+pub(super) async fn apply_patch(_token: &super::ExecutorToken, args: ApplyPatchArgs) -> Result<String> {
+    let unified_patch = args
+        .patch
+        .as_deref()
+        .or(args.patch_text.as_deref())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    if let Some(patch_text) = unified_patch {
+        if args.dry_run {
+            return Ok("dry-run unified diff parsing supported; execution skipped".to_string());
+        }
+        return apply_unified_diff_with_git(patch_text);
+    }
+
     if args.operations.is_empty() {
-        return Err(anyhow::anyhow!("operations cannot be empty"));
+        return Err(anyhow::anyhow!(
+            "operations cannot be empty (or provide patch/patch_text)"
+        ));
     }
     if args.operations.len() > 500 {
         return Err(anyhow::anyhow!("Too many operations (max 500)"));
@@ -253,9 +274,7 @@ pub async fn apply_patch(args: ApplyPatchArgs) -> Result<String> {
         for (idx, op) in args.operations.iter().enumerate() {
             match op {
                 PatchOperation::Add {
-                    path,
-                    overwrite,
-                    ..
+                    path, overwrite, ..
                 } => {
                     let validated = validate_path(path)?;
                     if validated.exists() && !overwrite {
@@ -267,28 +286,28 @@ pub async fn apply_patch(args: ApplyPatchArgs) -> Result<String> {
                     }
                     results.push(format!("dry-run add {}: ok", path));
                 }
-            PatchOperation::Update {
-                path,
-                old_text,
-                new_text,
-                all_occurrences,
-                before_context,
-                after_context,
-            } => {
-                let validated = validate_path(path)?;
-                let content = tokio::fs::read_to_string(&validated).await.map_err(|e| {
-                    anyhow::anyhow!("dry-run op {} failed to read {}: {}", idx, path, e)
-                })?;
-                let status = update_preview_status(
-                    &content,
+                PatchOperation::Update {
+                    path,
                     old_text,
                     new_text,
-                    *all_occurrences,
-                    before_context.as_deref(),
-                    after_context.as_deref(),
-                )?;
-                results.push(format!("dry-run update {}: {}", path, status));
-            }
+                    all_occurrences,
+                    before_context,
+                    after_context,
+                } => {
+                    let validated = validate_path(path)?;
+                    let content = tokio::fs::read_to_string(&validated).await.map_err(|e| {
+                        anyhow::anyhow!("dry-run op {} failed to read {}: {}", idx, path, e)
+                    })?;
+                    let status = update_preview_status(
+                        &content,
+                        old_text,
+                        new_text,
+                        *all_occurrences,
+                        before_context.as_deref(),
+                        after_context.as_deref(),
+                    )?;
+                    results.push(format!("dry-run update {}: {}", path, status));
+                }
                 PatchOperation::Delete { path } => {
                     let validated = validate_path(path)?;
                     if validated.exists() {
@@ -319,12 +338,22 @@ pub async fn apply_patch(args: ApplyPatchArgs) -> Result<String> {
                 content,
                 overwrite,
             } => {
-                let msg = write_file(WriteFileArgs {
-                    path: path.clone(),
-                    content,
-                    overwrite,
-                })
-                .await?;
+                let validated = validate_path(&path)?;
+                if validated.exists() && !overwrite {
+                    return Err(anyhow::anyhow!(
+                        "File already exists: {}. Set overwrite=true to replace.",
+                        path
+                    ));
+                }
+                if let Some(parent) = validated.parent() {
+                    tokio::fs::create_dir_all(parent).await?;
+                }
+                tokio::fs::write(&validated, &content).await?;
+                let msg = format!(
+                    "Successfully wrote {} bytes to {}",
+                    content.len(),
+                    path
+                );
                 results.push(format!("add {}: {}", path, msg));
             }
             PatchOperation::Update {
@@ -370,6 +399,42 @@ pub async fn apply_patch(args: ApplyPatchArgs) -> Result<String> {
     }
 
     Ok(results.join("\n"))
+}
+
+fn apply_unified_diff_with_git(patch_text: &str) -> Result<String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    if Command::new("git").arg("--version").output().is_err() {
+        return Err(anyhow::anyhow!(
+            "Unified diff apply requires git executable in PATH"
+        ));
+    }
+
+    let mut child = Command::new("git")
+        .args(["apply", "--whitespace=nowarn", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("Failed to start git apply: {}", e))?;
+
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin
+            .write_all(patch_text.as_bytes())
+            .map_err(|e| anyhow::anyhow!("Failed to write patch stdin: {}", e))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| anyhow::anyhow!("Failed waiting for git apply: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow::anyhow!("git apply failed: {}", stderr.trim()));
+    }
+
+    Ok("unified diff applied via git apply".to_string())
 }
 
 enum UndoAction {
@@ -454,10 +519,8 @@ async fn apply_patch_atomic(operations: Vec<PatchOperation>) -> Result<String> {
                         tokio::fs::remove_file(&validated).await?;
                         Ok(format!("delete {}: removed file", path))
                     } else if validated.is_dir() {
-                        let backup = std::env::temp_dir().join(format!(
-                            "nanobot_patch_backup_{}",
-                            uuid::Uuid::new_v4()
-                        ));
+                        let backup = std::env::temp_dir()
+                            .join(format!("nanobot_patch_backup_{}", uuid::Uuid::new_v4()));
                         tokio::fs::rename(&validated, &backup).await?;
                         undo.push(UndoAction::RestoreDir {
                             original: validated,
@@ -551,7 +614,8 @@ fn apply_update_content(
         return Err(anyhow::anyhow!("old_text cannot be empty"));
     }
 
-    let (search_start, search_end) = resolve_context_window(content, before_context, after_context)?;
+    let (search_start, search_end) =
+        resolve_context_window(content, before_context, after_context)?;
     let segment = &content[search_start..search_end];
 
     if segment.contains(old_text) {
@@ -560,7 +624,8 @@ fn apply_update_content(
         } else {
             segment.replacen(old_text, new_text, 1)
         };
-        let mut updated = String::with_capacity(content.len() - segment.len() + updated_segment.len());
+        let mut updated =
+            String::with_capacity(content.len() - segment.len() + updated_segment.len());
         updated.push_str(&content[..search_start]);
         updated.push_str(&updated_segment);
         updated.push_str(&content[search_end..]);
@@ -588,10 +653,7 @@ fn apply_update_content(
         } else {
             1
         };
-        return Ok((
-            Some(updated),
-            format!("replaced {} occurrence(s)", count),
-        ));
+        return Ok((Some(updated), format!("replaced {} occurrence(s)", count)));
     }
 
     if segment.contains(new_text) {

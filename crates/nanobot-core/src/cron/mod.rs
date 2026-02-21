@@ -290,7 +290,11 @@ impl CronScheduler {
                             };
 
                             if let Err(e) = event_tx.send(event).await {
-                                eprintln!("Failed to send cron event for job {}: {}", job_id, e);
+                                tracing::warn!(
+                                    "Failed to send cron event for job {}: {}",
+                                    job_id,
+                                    e
+                                );
                             }
                         })
                     },
@@ -334,13 +338,17 @@ impl CronScheduler {
                             };
 
                             if let Err(e) = event_tx.send(event).await {
-                                eprintln!("Failed to send cron event for job {}: {}", job_id, e);
+                                tracing::warn!(
+                                    "Failed to send cron event for job {}: {}",
+                                    job_id,
+                                    e
+                                );
                             }
                         })
                     })?;
                     self.scheduler.add(tokio_job).await?;
                 } else {
-                    eprintln!("Job {} scheduled in the past, skipping.", job_id);
+                    tracing::warn!("Job {} scheduled in the past, skipping.", job_id);
                 }
             }
         }
@@ -456,5 +464,72 @@ impl CronScheduler {
             "total_jobs": jobs.len(),
             "enabled_jobs": jobs.iter().filter(|j| j.enabled).count(),
         }))
+    }
+
+    /// Trigger a specific cron job immediately (manual run)
+    pub async fn trigger_job_now(&self, job_id: &str) -> Result<()> {
+        let jobs = self.list_jobs(true)?;
+        let job = jobs
+            .into_iter()
+            .find(|j| j.id == job_id)
+            .ok_or_else(|| anyhow!("Job not found: {}", job_id))?;
+
+        let event = match job.payload.clone() {
+            Payload::SystemEvent { text } => AgentEvent::SystemEvent {
+                job_id: Some(job.id.clone()),
+                text,
+            },
+            Payload::AgentTurn {
+                message,
+                model,
+                thinking,
+                timeout_seconds,
+            } => AgentEvent::AgentTurn {
+                job_id: Some(job.id.clone()),
+                message,
+                model,
+                thinking,
+                timeout_seconds,
+            },
+        };
+
+        self.event_tx
+            .send(event)
+            .await
+            .map_err(|e| anyhow!("Failed to dispatch job event: {}", e))?;
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let log_path = run_log::resolve_run_log_path(&self.db_path, &job.id);
+        let entry = run_log::CronRunEntry {
+            ts: now,
+            job_id: job.id,
+            action: "finished".to_string(),
+            status: Some("ok".to_string()),
+            error: None,
+            summary: Some("manually triggered".to_string()),
+            run_at_ms: Some(now),
+            duration_ms: Some(0),
+            next_run_at_ms: None,
+        };
+        let _ = run_log::append_run_log(&log_path, &entry, 2_000_000, 2000);
+
+        Ok(())
+    }
+
+    /// Read recent run entries for a cron job
+    pub fn job_runs(&self, job_id: &str, limit: usize) -> Result<Vec<run_log::CronRunEntry>> {
+        let log_path = run_log::resolve_run_log_path(&self.db_path, job_id);
+        run_log::read_run_log(&log_path, limit)
+    }
+
+    /// Inject a wake message into the active agent loop immediately
+    pub async fn wake_now(&self, text: String) -> Result<()> {
+        self.event_tx
+            .send(AgentEvent::SystemEvent { job_id: None, text })
+            .await
+            .map_err(|e| anyhow!("Failed to send wake event: {}", e))
     }
 }

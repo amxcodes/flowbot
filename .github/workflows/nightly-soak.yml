@@ -1,0 +1,94 @@
+name: Nightly Soak
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  # Nightly-only to avoid slowing regular PR/push feedback loops.
+  redis-soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      NANOBOT_REDIS_URL: redis://127.0.0.1:6379/
+      NANOBOT_REDIS_SOAK_DURATION_SECS: "600"
+      NANOBOT_REDIS_SOAK_SESSION_POOL: "64"
+      NANOBOT_ROLLING_SOAK_WAVES: "60"
+      NANOBOT_ROLLING_SOAK_REQUESTS_PER_WAVE: "4"
+      NANOBOT_ROLLING_SOAK_QPS: "6"
+      NANOBOT_PROCESS_ROLLING_SOAK_WAVES: "60"
+      NANOBOT_PROCESS_ROLLING_SOAK_REQUESTS_PER_WAVE: "4"
+      NANOBOT_PROCESS_ROLLING_SOAK_QPS: "6"
+      NANOBOT_PROCESS_ROLLING_SOAK_NODE_A_SLEEP_MS: "450"
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Wait for Redis service
+        run: |
+          python3 - <<'PY'
+          import socket
+          import time
+
+          host = "127.0.0.1"
+          port = 6379
+          deadline = time.time() + 30
+          while time.time() < deadline:
+              try:
+                  with socket.create_connection((host, port), timeout=1):
+                      print("Redis service reachable")
+                      raise SystemExit(0)
+              except OSError:
+                  time.sleep(1)
+
+          raise SystemExit("Redis service failed health check")
+          PY
+
+      - name: Run nightly redis soak
+        run: timeout 900 cargo test -p nanobot-core --features distributed-redis redis_store_soak_stability_nightly -- --ignored --nocapture | tee redis-soak.log
+
+      - name: Validate soak summary
+        run: python3 scripts/check_soak_summary.py redis-soak.log
+
+      - name: Run rolling restart soak
+        run: timeout 900 cargo test -p nanobot-core --features distributed-redis redis_rolling_restart_soak_nightly -- --ignored --nocapture | tee redis-rolling-soak.log
+
+      - name: Validate rolling soak summary
+        run: python3 scripts/check_rolling_soak_summary.py redis-rolling-soak.log
+
+      - name: Run process kill rolling restart soak
+        run: timeout 900 cargo test -p nanobot-core --features distributed-redis process_kill_rolling_restart_soak_nightly -- --ignored --nocapture | tee process-rolling-soak.log
+
+      - name: Validate process rolling soak summary
+        run: python3 scripts/check_process_rolling_soak_summary.py process-rolling-soak.log
+
+      - name: Run process WS dual-emit dedupe race
+        run: timeout 300 cargo test -p nanobot-core --features distributed-redis process_ws_dual_emit_dedupe_race_nightly -- --ignored --nocapture | tee process-dedupe-race.log
+
+      - name: Validate process dedupe race summary
+        run: python3 scripts/check_process_dedupe_race_summary.py process-dedupe-race.log
+
+      - name: Upload soak logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: redis-soak-logs
+          path: |
+            redis-soak.log
+            redis-rolling-soak.log
+            process-rolling-soak.log
+            process-dedupe-race.log

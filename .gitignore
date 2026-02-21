@@ -15,6 +15,11 @@ Cargo.lock
 
 # Environment variables
 .env
+config.toml
+
+# Local runtime state / secrets
+.nanobot/
+crates/nanobot-core/.nanobot/
 
 # VS Code settings
 .vscode/
@@ -25,3 +30,17 @@ artifacts/
 
 # System generated logs
 .system_generated/
+
+# Runtime caches/artifacts
+.fastembed_cache/
+crates/nanobot-core/.fastembed_cache/
+workspace/skills/*/node_modules/
+workspace/skills/*/package-lock.json
+
+# Local logs and one-off outputs
+build_errors.txt
+build_log.txt
+check_output.txt
+test_errors.txt
+test_errors_2.txt
+test_run_output.txt

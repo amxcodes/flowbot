@@ -80,10 +80,9 @@ impl TokenManager {
             ));
         };
 
-        // Perform Refresh
-        eprintln!(
-            "DEBUG: Refreshing expired/missing token for provider: {}",
-            self.provider
+        tracing::debug!(
+            provider = %self.provider,
+            "Refreshing expired or missing OAuth token"
         );
         let flow = OAuthFlow::new(&self.provider);
         let mut new_token = flow.refresh_access_token(&refresh_token).await?;

@@ -1,9 +1,9 @@
 use aes_gcm::{
-    aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit},
 };
-use anyhow::{anyhow, Result};
-use base64::{engine::general_purpose, Engine as _};
+use anyhow::{Result, anyhow};
+use base64::{Engine as _, engine::general_purpose};
 use pbkdf2::pbkdf2_hmac;
 use rand::RngCore;
 use sha2::Sha256;
@@ -91,12 +91,25 @@ impl SecretManager {
 
     /// Get salt storage path
     pub fn salt_path() -> PathBuf {
-        PathBuf::from(".").join(".nanobot").join(".salt")
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".nanobot")
+            .join(".salt")
     }
 
     /// Load or create salt file
     pub fn load_or_create_salt() -> Result<[u8; SALT_SIZE]> {
         let salt_path = Self::salt_path();
+
+        if !salt_path.exists() {
+            let legacy_path = PathBuf::from(".").join(".nanobot").join(".salt");
+            if legacy_path.exists() {
+                if let Some(parent) = salt_path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                let _ = std::fs::copy(&legacy_path, &salt_path);
+            }
+        }
 
         if salt_path.exists() {
             // Load existing salt
@@ -116,15 +129,15 @@ impl SecretManager {
                 std::fs::create_dir_all(parent)?;
             }
 
-            std::fs::write(&salt_path, &salt)?;
+            std::fs::write(&salt_path, salt)?;
             Ok(salt)
         }
     }
 
     /// Create SecretManager from environment variable or prompt
     pub fn from_env_or_prompt() -> Result<Self> {
-        // Try environment variable first
-        if let Ok(password) = std::env::var("NANOBOT_MASTER_PASSWORD") {
+        // Try configured primary password first
+        if let Some(password) = crate::security::read_primary_password() {
             let salt = Self::load_or_create_salt()?;
             return Self::new(&password, &salt);
         }

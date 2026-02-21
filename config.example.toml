@@ -1,36 +1,20 @@
 # Example Nanobot Configuration
 # Copy this to config.toml and fill in your API keys
 
-default_provider = "anthropic"  # Options: anthropic, openai, google, groq, perplexity, deepseek, openrouter, antigravity
+default_provider = "antigravity"  # Supported: antigravity, openai, google, openrouter
 
 # Provider configurations
-[providers.anthropic]
-api_key = "sk-ant-your-key-here"
-model = "claude-opus-4-6"  # Optional: defaults to claude-opus-4-6
-
 [providers.openai]
 api_key = "sk-your-key-here"
-model = "gpt-5-2"  # Optional: defaults to gpt-5-2
+model = "gpt-4o"  # Optional
 
 [providers.google]
 api_key = "AIzaSy-your-key-here"
-model = "gemini-3-pro"  # Optional: defaults to gemini-3-pro
-
-[providers.groq]
-api_key = "gsk_your-key-here"
-model = "llama-3.3-70b-versatile"  # Optional
-
-[providers.perplexity]
-api_key = "pplx-your-key-here"
-model = "llama-3.1-sonar-large-128k-online"  # Optional
-
-[providers.deepseek]
-api_key = "sk-your-key-here"
-model = "deepseek-chat"  # Optional
+model = "gemini-2.0-flash"  # Optional
 
 [providers.openrouter]
 api_key = "sk-or-your-key-here"
-model = "anthropic/claude-opus-4-6"  # Optional
+model = "google/gemini-2.0-flash-001"  # Optional
 
 [providers.antigravity]
 api_key = "your-key-here"

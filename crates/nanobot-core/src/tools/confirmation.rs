@@ -37,7 +37,10 @@ pub struct ConfirmationResponse {
 pub trait ConfirmationAdapter: Send + Sync {
     /// Request confirmation from the user
     /// Returns true if approved, false if denied
-    async fn request_confirmation(&self, request: &ConfirmationRequest) -> Result<ConfirmationResponse>;
+    async fn request_confirmation(
+        &self,
+        request: &ConfirmationRequest,
+    ) -> Result<ConfirmationResponse>;
 
     /// Get the adapter's name (for logging/debugging)
     fn name(&self) -> &str;
@@ -75,7 +78,10 @@ impl ConfirmationService {
     }
 
     /// Request confirmation using the first available adapter
-    pub async fn request_confirmation(&self, mut request: ConfirmationRequest) -> Result<ConfirmationResponse> {
+    pub async fn request_confirmation(
+        &self,
+        mut request: ConfirmationRequest,
+    ) -> Result<ConfirmationResponse> {
         if request.id.is_empty() {
             request.id = uuid::Uuid::new_v4().to_string();
         }
@@ -164,7 +170,10 @@ mod tests {
 
     #[async_trait]
     impl ConfirmationAdapter for MockAdapter {
-        async fn request_confirmation(&self, request: &ConfirmationRequest) -> Result<ConfirmationResponse> {
+        async fn request_confirmation(
+            &self,
+            request: &ConfirmationRequest,
+        ) -> Result<ConfirmationResponse> {
             Ok(ConfirmationResponse {
                 id: request.id.clone(),
                 allowed: self.response,

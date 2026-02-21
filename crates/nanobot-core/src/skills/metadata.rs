@@ -67,6 +67,17 @@ pub struct SkillMetadata {
     /// Optional native env vars
     pub native_env: std::collections::HashMap<String, String>,
 
+    /// OpenClaw-compatible load-time gates
+    pub requires_bins: Vec<String>,
+    pub requires_any_bins: Vec<String>,
+    pub requires_env: Vec<String>,
+    pub requires_config: Vec<String>,
+    #[serde(default)]
+    pub openclaw_install: Vec<OpenClawInstallHint>,
+    pub allowed_os: Vec<String>,
+    pub always: bool,
+    pub homepage: Option<String>,
+
     /// Whether this skill is enabled
     pub enabled: bool,
 
@@ -90,6 +101,18 @@ pub struct SkillTool {
 
     /// Schema/parameters (optional JSON schema)
     pub schema: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OpenClawInstallHint {
+    pub id: Option<String>,
+    pub kind: Option<String>,
+    pub label: Option<String>,
+    pub bins: Vec<String>,
+    pub formula: Option<String>,
+    pub package: Option<String>,
+    pub command: Option<String>,
+    pub args: Vec<String>,
 }
 
 impl SkillMetadata {
@@ -127,13 +150,90 @@ impl SkillMetadata {
         let mut native_args: Vec<String> = Vec::new();
         let mut native_env: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
+        let mut config_schema = None;
 
-        // Simple frontmatter parsing (YAML-like)
-        if content.starts_with("---") {
-            if let Some(end_idx) = content[3..].find("---") {
-                let frontmatter = &content[3..end_idx + 3];
+        let mut requires_bins: Vec<String> = Vec::new();
+        let mut requires_any_bins: Vec<String> = Vec::new();
+        let mut requires_env: Vec<String> = Vec::new();
+        let mut requires_config: Vec<String> = Vec::new();
+        let mut openclaw_install: Vec<OpenClawInstallHint> = Vec::new();
+        let mut allowed_os: Vec<String> = Vec::new();
+        let mut always = false;
+        let mut homepage: Option<String> = None;
 
-                // Parse key-value pairs
+        // Parse YAML frontmatter first (OpenClaw/AgentSkills compatible).
+        if let Some(frontmatter) = extract_frontmatter(content) {
+            if let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(frontmatter)
+                && let Some(map) = value.as_mapping()
+            {
+                name = yaml_string(map, "name").unwrap_or(name);
+                description = yaml_string(map, "description").unwrap_or(description);
+                category = yaml_string(map, "category").unwrap_or(category);
+                status = yaml_string(map, "status").unwrap_or(status);
+                author = yaml_string(map, "author");
+                backend = yaml_string(map, "backend").unwrap_or(backend);
+                mcp_server_name = yaml_string(map, "mcp_server_name");
+                mcp_command = yaml_string(map, "mcp_command");
+                deno_command = yaml_string(map, "deno_command");
+                deno_script = yaml_string(map, "deno_script");
+                deno_sandbox = yaml_string(map, "deno_sandbox");
+                native_command = yaml_string(map, "native_command");
+                config_schema = yaml_string(map, "config_schema");
+                homepage = yaml_string(map, "homepage");
+
+                mcp_args = yaml_list(map, "mcp_args");
+                deno_args = yaml_list(map, "deno_args");
+                deno_permissions = yaml_list(map, "deno_permissions");
+                native_args = yaml_list(map, "native_args");
+
+                collect_prefixed_env(map, "mcp_env.", &mut mcp_env);
+                collect_prefixed_env(map, "deno_env.", &mut deno_env);
+                collect_prefixed_env(map, "native_env.", &mut native_env);
+
+                if let Some(openclaw) = map
+                    .get(serde_yaml::Value::String("metadata".to_string()))
+                    .and_then(metadata_openclaw)
+                {
+                    always = openclaw
+                        .get("always")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if homepage.is_none() {
+                        homepage = openclaw
+                            .get("homepage")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                    }
+                    allowed_os = openclaw
+                        .get("os")
+                        .map(yaml_value_to_string_list)
+                        .unwrap_or_default();
+
+                    if let Some(requires) = openclaw.get("requires") {
+                        requires_bins = requires
+                            .get("bins")
+                            .map(yaml_value_to_string_list)
+                            .unwrap_or_default();
+                        requires_any_bins = requires
+                            .get("anyBins")
+                            .map(yaml_value_to_string_list)
+                            .unwrap_or_default();
+                        requires_env = requires
+                            .get("env")
+                            .map(yaml_value_to_string_list)
+                            .unwrap_or_default();
+                        requires_config = requires
+                            .get("config")
+                            .map(yaml_value_to_string_list)
+                            .unwrap_or_default();
+                    }
+
+                    if let Some(install) = openclaw.get("install") {
+                        openclaw_install = parse_openclaw_install_hints(install);
+                    }
+                }
+            } else {
+                // Fallback parser for loosely formatted community frontmatter.
                 for line in frontmatter.lines() {
                     if let Some((key, value)) = line.split_once(':') {
                         let key = key.trim();
@@ -148,22 +248,16 @@ impl SkillMetadata {
                             "backend" => backend = value.to_string(),
                             "mcp_server_name" => mcp_server_name = Some(value.to_string()),
                             "mcp_command" => mcp_command = Some(value.to_string()),
-                            "mcp_args" => {
-                                mcp_args = parse_list_value(value);
-                            }
+                            "mcp_args" => mcp_args = parse_list_value(value),
                             "deno_command" => deno_command = Some(value.to_string()),
                             "deno_script" => deno_script = Some(value.to_string()),
-                            "deno_args" => {
-                                deno_args = parse_list_value(value);
-                            }
+                            "deno_args" => deno_args = parse_list_value(value),
                             "deno_sandbox" => deno_sandbox = Some(value.to_string()),
-                            "deno_permissions" => {
-                                deno_permissions = parse_list_value(value);
-                            }
+                            "deno_permissions" => deno_permissions = parse_list_value(value),
                             "native_command" => native_command = Some(value.to_string()),
-                            "native_args" => {
-                                native_args = parse_list_value(value);
-                            }
+                            "native_args" => native_args = parse_list_value(value),
+                            "config_schema" => config_schema = Some(value.to_string()),
+                            "homepage" => homepage = Some(value.to_string()),
                             _ => {}
                         }
 
@@ -201,11 +295,7 @@ impl SkillMetadata {
                     current_text.clear();
                 }
                 Event::End(TagEnd::Heading(_)) => {
-                    if current_text.contains("Tools Provided") {
-                        in_tools_section = true;
-                    } else {
-                        in_tools_section = false;
-                    }
+                    in_tools_section = current_text.contains("Tools Provided");
                     current_text.clear();
                 }
                 Event::Start(Tag::Item) if in_tools_section => {
@@ -238,6 +328,39 @@ impl SkillMetadata {
             }
         }
 
+        // Community SKILL.md files often use heading-style tool sections:
+        // ### `tool_name`
+        // Description...
+        if tools.is_empty() {
+            tools = parse_heading_style_tools(content);
+        }
+
+        // Compatibility heuristics for community skills:
+        // If backend is not explicitly set to mcp/native and a TS/JS entrypoint exists,
+        // prefer deno execution with sensible defaults.
+        if backend == "native"
+            && deno_script.is_none()
+            && let Some(skill_dir) = path.parent()
+        {
+            let candidates = ["main.ts", "index.ts", "skill.ts", "main.js", "index.js"];
+            for c in candidates {
+                let p = skill_dir.join(c);
+                if p.exists() {
+                    backend = "deno".to_string();
+                    deno_script = Some(p.to_string_lossy().to_string());
+                    if deno_args.is_empty() {
+                        deno_args = vec![
+                            "run".to_string(),
+                            "--compat".to_string(),
+                            "--unstable-node-globals".to_string(),
+                            "--unstable-bare-node-builtins".to_string(),
+                        ];
+                    }
+                    break;
+                }
+            }
+        }
+
         Ok(SkillMetadata {
             name,
             category,
@@ -260,8 +383,16 @@ impl SkillMetadata {
             native_command,
             native_args,
             native_env,
+            requires_bins,
+            requires_any_bins,
+            requires_env,
+            requires_config,
+            openclaw_install,
+            allowed_os,
+            always,
+            homepage,
             enabled: true, // Default to enabled
-            config_schema: None,
+            config_schema,
             skill_path: path,
         })
     }
@@ -270,6 +401,155 @@ impl SkillMetadata {
     pub fn has_tool(&self, tool_name: &str) -> bool {
         self.tools.iter().any(|t| t.name == tool_name)
     }
+}
+
+fn extract_frontmatter(content: &str) -> Option<&str> {
+    if !content.starts_with("---") {
+        return None;
+    }
+
+    let mut lines = content.lines();
+    let first = lines.next()?;
+    if first.trim() != "---" {
+        return None;
+    }
+
+    let mut offset = first.len() + 1;
+    for line in lines {
+        if line.trim() == "---" {
+            return content.get(4..offset - 1);
+        }
+        offset += line.len() + 1;
+    }
+
+    None
+}
+
+fn yaml_string(map: &serde_yaml::Mapping, key: &str) -> Option<String> {
+    map.get(serde_yaml::Value::String(key.to_string()))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+fn yaml_list(map: &serde_yaml::Mapping, key: &str) -> Vec<String> {
+    map.get(serde_yaml::Value::String(key.to_string()))
+        .map(yaml_value_to_string_list)
+        .unwrap_or_default()
+}
+
+fn yaml_value_to_string_list(v: &serde_yaml::Value) -> Vec<String> {
+    if let Some(arr) = v.as_sequence() {
+        return arr
+            .iter()
+            .filter_map(|x| x.as_str().map(|s| s.trim().to_string()))
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
+    if let Some(s) = v.as_str() {
+        return parse_list_value(s);
+    }
+    Vec::new()
+}
+
+fn collect_prefixed_env(
+    map: &serde_yaml::Mapping,
+    prefix: &str,
+    output: &mut std::collections::HashMap<String, String>,
+) {
+    for (k, v) in map {
+        let Some(key) = k.as_str() else {
+            continue;
+        };
+        if !key.starts_with(prefix) {
+            continue;
+        }
+        let env_key = key.trim_start_matches(prefix).trim();
+        let Some(env_val) = v.as_str() else {
+            continue;
+        };
+        if !env_key.is_empty() {
+            output.insert(env_key.to_string(), env_val.to_string());
+        }
+    }
+}
+
+fn metadata_openclaw(metadata: &serde_yaml::Value) -> Option<serde_yaml::Mapping> {
+    if let Some(map) = metadata.as_mapping() {
+        return map
+            .get(serde_yaml::Value::String("openclaw".to_string()))
+            .and_then(|v| v.as_mapping().cloned());
+    }
+
+    let raw = metadata.as_str()?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    serde_yaml::from_str::<serde_yaml::Value>(raw)
+        .ok()?
+        .as_mapping()?
+        .get(serde_yaml::Value::String("openclaw".to_string()))
+        .and_then(|v| v.as_mapping().cloned())
+}
+
+fn parse_heading_style_tools(content: &str) -> Vec<SkillTool> {
+    let mut tools = Vec::new();
+    let mut in_tools_section = false;
+    let mut lines = content.lines().peekable();
+
+    while let Some(raw) = lines.next() {
+        let line = raw.trim();
+
+        if line.starts_with("## ") {
+            in_tools_section = line.to_ascii_lowercase().contains("tools provided");
+            continue;
+        }
+
+        if !in_tools_section {
+            continue;
+        }
+
+        if let Some(rest) = line.strip_prefix("### ") {
+            let heading = rest.trim();
+            let tool_name = heading
+                .trim_matches('`')
+                .split_whitespace()
+                .next()
+                .unwrap_or(heading)
+                .trim_matches('`')
+                .to_string();
+
+            if tool_name.is_empty() {
+                continue;
+            }
+
+            let mut description = String::new();
+            while let Some(next) = lines.peek() {
+                let t = next.trim();
+                if t.starts_with("### ") || t.starts_with("## ") {
+                    break;
+                }
+                let consumed = lines.next().unwrap_or_default();
+                let consumed_trimmed = consumed.trim();
+                if consumed_trimmed.is_empty() {
+                    continue;
+                }
+                if consumed_trimmed.starts_with('-') {
+                    continue;
+                }
+                description = consumed_trimmed.to_string();
+                break;
+            }
+
+            tools.push(SkillTool {
+                name: tool_name,
+                description,
+                command: None,
+                schema: None,
+            });
+        }
+    }
+
+    tools
 }
 
 fn parse_list_value(raw: &str) -> Vec<String> {
@@ -293,6 +573,53 @@ fn parse_list_value(raw: &str) -> Vec<String> {
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
+        .collect()
+}
+
+fn parse_openclaw_install_hints(v: &serde_yaml::Value) -> Vec<OpenClawInstallHint> {
+    let Some(items) = v.as_sequence() else {
+        return Vec::new();
+    };
+
+    items
+        .iter()
+        .filter_map(|entry| {
+            let map = entry.as_mapping()?;
+            Some(OpenClawInstallHint {
+                id: map
+                    .get(serde_yaml::Value::String("id".to_string()))
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string()),
+                kind: map
+                    .get(serde_yaml::Value::String("kind".to_string()))
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string()),
+                label: map
+                    .get(serde_yaml::Value::String("label".to_string()))
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string()),
+                bins: map
+                    .get(serde_yaml::Value::String("bins".to_string()))
+                    .map(yaml_value_to_string_list)
+                    .unwrap_or_default(),
+                formula: map
+                    .get(serde_yaml::Value::String("formula".to_string()))
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string()),
+                package: map
+                    .get(serde_yaml::Value::String("package".to_string()))
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string()),
+                command: map
+                    .get(serde_yaml::Value::String("command".to_string()))
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string()),
+                args: map
+                    .get(serde_yaml::Value::String("args".to_string()))
+                    .map(yaml_value_to_string_list)
+                    .unwrap_or_default(),
+            })
+        })
         .collect()
 }
 
@@ -368,5 +695,94 @@ This is a test.
             metadata.native_env.get("LEVEL").map(|s| s.as_str()),
             Some("debug")
         );
+    }
+
+    #[test]
+    fn parses_heading_style_tools() {
+        let content = r#"---
+name: github
+description: "GitHub ops"
+---
+
+## Tools Provided
+
+### `gh_issue_list`
+List issues in a repository.
+- **Args**: repo, state, limit
+
+### `gh_pr_list`
+List pull requests.
+"#;
+
+        let metadata = SkillMetadata::from_markdown(
+            std::path::PathBuf::from("/skills/github/SKILL.md"),
+            content,
+        )
+        .unwrap();
+
+        assert_eq!(metadata.tools.len(), 2);
+        assert_eq!(metadata.tools[0].name, "gh_issue_list");
+        assert!(metadata.tools[0].description.contains("List issues"));
+        assert_eq!(metadata.tools[1].name, "gh_pr_list");
+    }
+
+    #[test]
+    fn parses_gog_style_frontmatter_metadata_block() {
+        let content = r#"---
+name: gog
+description: Google Workspace CLI
+metadata:
+  {
+    "openclaw":
+      {
+        "requires": { "bins": ["gog"] },
+      },
+  }
+---
+
+# gog
+Use gog CLI.
+"#;
+
+        let metadata =
+            SkillMetadata::from_markdown(std::path::PathBuf::from("/skills/gog/SKILL.md"), content)
+                .unwrap();
+
+        assert_eq!(metadata.name, "gog");
+        assert_eq!(metadata.backend, "native");
+    }
+
+    #[test]
+    fn parses_openclaw_install_hints() {
+        let content = r#"---
+name: github
+description: GitHub CLI
+metadata:
+  openclaw:
+    install:
+      - id: brew
+        kind: brew
+        formula: gh
+        bins: [gh]
+        label: Install GitHub CLI (brew)
+      - id: apt
+        kind: apt
+        package: gh
+        bins: [gh]
+---
+
+# github
+"#;
+
+        let metadata = SkillMetadata::from_markdown(
+            std::path::PathBuf::from("/skills/github/SKILL.md"),
+            content,
+        )
+        .unwrap();
+
+        assert_eq!(metadata.openclaw_install.len(), 2);
+        assert_eq!(metadata.openclaw_install[0].id.as_deref(), Some("brew"));
+        assert_eq!(metadata.openclaw_install[0].formula.as_deref(), Some("gh"));
+        assert_eq!(metadata.openclaw_install[1].package.as_deref(), Some("gh"));
     }
 }

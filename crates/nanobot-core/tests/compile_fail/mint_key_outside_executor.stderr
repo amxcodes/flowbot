@@ -1,0 +1,11 @@
+error[E0603]: struct `ExecutorMintKey` is private
+ --> tests/compile_fail/mint_key_outside_executor.rs:1:36
+  |
+1 | use nanobot_core::tools::executor::ExecutorMintKey;
+  |                                    ^^^^^^^^^^^^^^^ private struct
+  |
+note: the struct `ExecutorMintKey` is defined here
+ --> src/tools/executor.rs
+  |
+  | pub(in crate::tools) struct ExecutorMintKey(());
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

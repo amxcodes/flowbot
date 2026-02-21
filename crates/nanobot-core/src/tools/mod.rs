@@ -1,50 +1,57 @@
 // Tools module - Provides file system, web search, and command execution capabilities
 
+pub mod batch;
+pub mod channel_confirmation;
+pub mod cli_confirmation;
 pub mod cli_wrapper;
 pub mod commands;
+pub mod confirmation;
 pub mod cron;
 pub mod definitions;
-pub mod permissions;
-pub mod confirmation;
-pub mod cli_confirmation;
-pub mod telegram_confirmation;
-pub mod gateway_confirmation;
-pub mod channel_confirmation;
 pub mod docker;
 pub mod docker_executor;
 pub mod executor;
+pub mod gateway_confirmation;
 pub mod guard;
+pub mod permissions;
+pub mod telegram_confirmation;
 
-pub use permissions::{PermissionManager, SecurityProfile, PermissionDecision, Operation};
-pub use confirmation::{ConfirmationRequest, ConfirmationResponse, ConfirmationService, ConfirmationAdapter, RiskLevel};
 pub use channel_confirmation::ChannelConfirmationResponse;
-pub mod fetch;
-pub mod filesystem;
-pub mod list_directory_tool;
+pub use confirmation::{
+    ConfirmationAdapter, ConfirmationRequest, ConfirmationResponse, ConfirmationService, RiskLevel,
+};
+pub use permissions::{Operation, PermissionDecision, PermissionManager, SecurityProfile};
+mod fetch;
+mod filesystem;
+pub mod llm_task;
 pub mod policy;
-pub mod process;
-pub mod search;
+mod process;
 pub mod question;
-pub mod todos;
-pub mod read_file_tool;
 pub mod run_command_tool;
+pub mod script_eval_tool;
+mod search;
 pub mod sessions;
+pub mod stt;
 pub mod subagent_tools;
+mod todos;
+pub mod tts;
 pub mod web_search_tool;
 pub mod websearch;
-pub mod write_file_tool;
-pub mod edit_file_tool;
-pub mod spawn_process_tool;
-pub mod read_process_output_tool;
-pub mod kill_process_tool;
-pub mod web_fetch_tool;
-pub mod write_process_input_tool;
-pub mod script_eval_tool;
-pub mod llm_task;
-pub mod tts;
-pub mod stt;
 
 use anyhow::Result;
+
+mod sealed {
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct ExecutorToken(());
+
+    impl ExecutorToken {
+        pub(in crate::tools) const fn new(_key: super::executor::ExecutorMintKey) -> Self {
+            Self(())
+        }
+    }
+}
+
+pub(crate) use sealed::ExecutorToken;
 
 // Re-export key types
 pub use policy::ToolPolicy;
@@ -124,12 +131,37 @@ pub fn validate_path(path: &str) -> Result<std::path::PathBuf> {
         }
     }
 
-    // Make relative to current working directory
-    let canonical = if path.is_relative() {
+    let candidate = if path.is_relative() {
         std::env::current_dir()?.join(path)
     } else {
         path.to_path_buf()
     };
 
-    Ok(canonical)
+    let normalized = normalize_for_scope(&candidate)?;
+    Ok(normalized)
+}
+
+fn normalize_for_scope(path: &std::path::Path) -> Result<std::path::PathBuf> {
+    if path.exists() {
+        return Ok(path.canonicalize()?);
+    }
+
+    let mut missing_parts = Vec::new();
+    let mut cursor = path;
+
+    while !cursor.exists() {
+        if let Some(name) = cursor.file_name() {
+            missing_parts.push(name.to_os_string());
+        }
+        cursor = cursor
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("Path has no existing ancestor: {}", path.display()))?;
+    }
+
+    let mut resolved = cursor.canonicalize()?;
+    for part in missing_parts.iter().rev() {
+        resolved.push(part);
+    }
+
+    Ok(resolved)
 }

@@ -1,5 +1,6 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
+use std::fs;
 use std::path::PathBuf;
 
 /// Security profile defining what a tool/skill can do
@@ -23,7 +24,7 @@ impl SecurityProfile {
             allow_execution: true,
             allow_file_write: true,
             allow_file_delete: true,
-            filesystem_scope: None, // No restriction
+            filesystem_scope: None,                   // No restriction
             network_allowlist: vec!["*".to_string()], // All networks
         }
     }
@@ -32,7 +33,7 @@ impl SecurityProfile {
     pub fn standard(workspace: PathBuf) -> Self {
         Self {
             name: "standard".to_string(),
-            allow_commands: false, // Requires confirmation
+            allow_commands: false,  // Requires confirmation
             allow_execution: false, // Requires confirmation
             allow_file_write: true,
             allow_file_delete: false, // Requires confirmation
@@ -102,19 +103,19 @@ impl PermissionManager {
     pub fn check_permission(&self, operation: &Operation) -> PermissionDecision {
         match operation {
             Operation::ReadFile(path) => {
-                if let Some(scope) = &self.profile.filesystem_scope {
-                    if !path.starts_with(scope) {
-                        return PermissionDecision::Deny;
-                    }
+                if let Some(scope) = &self.profile.filesystem_scope
+                    && !path_within_scope(path, scope)
+                {
+                    return PermissionDecision::Deny;
                 }
                 PermissionDecision::Allow
             }
 
             Operation::WriteFile(path) => {
-                if let Some(scope) = &self.profile.filesystem_scope {
-                    if !path.starts_with(scope) {
-                        return PermissionDecision::Deny;
-                    }
+                if let Some(scope) = &self.profile.filesystem_scope
+                    && !path_within_scope(path, scope)
+                {
+                    return PermissionDecision::Deny;
                 }
 
                 if self.profile.allow_file_write {
@@ -125,10 +126,10 @@ impl PermissionManager {
             }
 
             Operation::DeleteFile(path) => {
-                if let Some(scope) = &self.profile.filesystem_scope {
-                    if !path.starts_with(scope) {
-                        return PermissionDecision::Deny;
-                    }
+                if let Some(scope) = &self.profile.filesystem_scope
+                    && !path_within_scope(path, scope)
+                {
+                    return PermissionDecision::Deny;
                 }
 
                 if self.profile.allow_file_delete {
@@ -151,7 +152,7 @@ impl PermissionManager {
                     return PermissionDecision::Allow;
                 }
 
-                if self.profile.network_allowlist.iter().any(|allowed| url.contains(allowed)) {
+                if network_allowed(url, &self.profile.network_allowlist) {
                     PermissionDecision::Allow
                 } else {
                     PermissionDecision::Ask
@@ -176,6 +177,68 @@ impl PermissionManager {
     }
 }
 
+fn normalize_path_for_scope(path: &std::path::Path) -> Option<PathBuf> {
+    if path.exists() {
+        return fs::canonicalize(path).ok();
+    }
+
+    let mut missing_parts = Vec::new();
+    let mut cursor = path;
+
+    while !cursor.exists() {
+        if let Some(name) = cursor.file_name() {
+            missing_parts.push(name.to_os_string());
+        }
+        cursor = cursor.parent()?;
+    }
+
+    let mut resolved = fs::canonicalize(cursor).ok()?;
+    for part in missing_parts.iter().rev() {
+        resolved.push(part);
+    }
+    Some(resolved)
+}
+
+fn path_within_scope(path: &std::path::Path, scope: &std::path::Path) -> bool {
+    let Some(normalized_scope) = normalize_path_for_scope(scope) else {
+        return false;
+    };
+    let Some(normalized_path) = normalize_path_for_scope(path) else {
+        return false;
+    };
+    normalized_path.starts_with(normalized_scope)
+}
+
+fn network_allowed(url: &str, allowlist: &[String]) -> bool {
+    let parsed = url::Url::parse(url).ok();
+    let host = parsed
+        .as_ref()
+        .and_then(|u| u.host_str())
+        .map(|h| h.to_ascii_lowercase());
+
+    allowlist.iter().any(|allowed| {
+        let allowed = allowed.trim().to_ascii_lowercase();
+        if allowed.is_empty() {
+            return false;
+        }
+        if allowed == "*" {
+            return true;
+        }
+
+        if let Some(host) = host.as_ref() {
+            if host == &allowed {
+                return true;
+            }
+            if let Some(suffix) = allowed.strip_prefix("*.") {
+                return host.ends_with(suffix) && host.len() > suffix.len();
+            }
+            return host.ends_with(&format!(".{}", allowed));
+        }
+
+        false
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,7 +246,7 @@ mod tests {
     #[test]
     fn test_trust_profile() {
         let manager = PermissionManager::new(SecurityProfile::trust());
-        
+
         assert_eq!(
             manager.check_permission(&Operation::ExecuteCommand("rm -rf /".to_string())),
             PermissionDecision::Allow

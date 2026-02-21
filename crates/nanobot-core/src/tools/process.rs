@@ -4,14 +4,15 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
 // Global Process Manager
-pub static PROCESS_MANAGER: Lazy<Arc<ProcessManager>> =
+static PROCESS_MANAGER: Lazy<Arc<ProcessManager>> =
     Lazy::new(|| Arc::new(ProcessManager::new()));
 
-pub struct ProcessManager {
+struct ProcessManager {
     // We store handles to managing tasks/channels, not just the Child itself
     // because we move the Child's streams to background tasks.
     processes: Mutex<HashMap<u32, ProcessHandle>>,
@@ -21,6 +22,7 @@ struct ProcessHandle {
     input_tx: tokio::sync::mpsc::Sender<String>,
     output_buffer: Arc<Mutex<Vec<String>>>, // Circular buffer
     kill_tx: tokio::sync::mpsc::Sender<()>,
+    exited_at: Arc<Mutex<Option<Instant>>>,
 }
 
 #[derive(Serialize)]
@@ -31,13 +33,83 @@ struct ProcessSnapshot {
 }
 
 impl ProcessManager {
+    const EXITED_RETAIN_FOR: Duration = Duration::from_secs(300);
+    const MAX_TRACKED_PROCESSES: usize = 256;
+
     fn new() -> Self {
         Self {
             processes: Mutex::new(HashMap::new()),
         }
     }
 
+    fn cleanup_stale_locked(processes: &mut HashMap<u32, ProcessHandle>) {
+        let now = Instant::now();
+        let mut expired = Vec::new();
+        let mut removed = 0u64;
+
+        for (pid, handle) in processes.iter() {
+            if let Ok(guard) = handle.exited_at.lock()
+                && let Some(exited_at) = *guard
+                && now.saturating_duration_since(exited_at) >= Self::EXITED_RETAIN_FOR
+            {
+                expired.push(*pid);
+            }
+        }
+
+        for pid in expired {
+            if processes.remove(&pid).is_some() {
+                removed = removed.saturating_add(1);
+            }
+        }
+
+        if processes.len() <= Self::MAX_TRACKED_PROCESSES {
+            return;
+        }
+
+        let mut exited: Vec<(u32, Instant)> = processes
+            .iter()
+            .filter_map(|(pid, handle)| {
+                handle
+                    .exited_at
+                    .lock()
+                    .ok()
+                    .and_then(|g| g.map(|t| (*pid, t)))
+            })
+            .collect();
+        exited.sort_by_key(|(_, t)| *t);
+
+        let over = processes.len().saturating_sub(Self::MAX_TRACKED_PROCESSES);
+        for (pid, _) in exited.into_iter().take(over) {
+            if processes.remove(&pid).is_some() {
+                removed = removed.saturating_add(1);
+            }
+        }
+
+        if removed > 0 {
+            crate::metrics::GLOBAL_METRICS
+                .increment_counter("process_manager_stale_entries_removed_total", removed);
+        }
+    }
+
     pub async fn spawn(&self, cmd: String, args: Vec<String>) -> Result<u32> {
+        if !super::commands::command_allowed(&cmd) {
+            return Err(anyhow!(
+                "Command '{}' is not in the allowed whitelist.",
+                cmd
+            ));
+        }
+
+        if super::commands::dangerous_command_detected(&cmd, &args)
+            && std::env::var("NANOBOT_ALLOW_DANGEROUS_COMMANDS")
+                .ok()
+                .as_deref()
+                != Some("1")
+        {
+            return Err(anyhow!(
+                "Blocked dangerous command. Set NANOBOT_ALLOW_DANGEROUS_COMMANDS=1 to override explicitly."
+            ));
+        }
+
         let mut child = Command::new(&cmd)
             .args(&args)
             .stdout(Stdio::piped())
@@ -50,12 +122,23 @@ impl ProcessManager {
         let pid = child.id().ok_or_else(|| anyhow!("Process has no PID"))?;
 
         // Setup IO
-        let stdout = child.stdout.take().expect("stdout should be piped");
-        let stderr = child.stderr.take().expect("stderr should be piped");
-        let mut stdin = child.stdin.take().expect("stdin should be piped");
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("stdout pipe unavailable"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| anyhow!("stderr pipe unavailable"))?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow!("stdin pipe unavailable"))?;
 
         let output_buffer = Arc::new(Mutex::new(Vec::new()));
         let buffer_clone = output_buffer.clone();
+        let exited_at = Arc::new(Mutex::new(None));
+        let exited_at_clone = exited_at.clone();
 
         // Input Channel
         let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<String>(100);
@@ -107,17 +190,24 @@ impl ProcessManager {
                 }
             }
             Self::append_log(&buffer_clone, "[PROCESS EXITED]".to_string());
+            if let Ok(mut guard) = exited_at_clone.lock() {
+                *guard = Some(Instant::now());
+            }
         });
 
         let handle = ProcessHandle {
             input_tx,
             output_buffer,
             kill_tx,
+            exited_at,
         };
 
-        self.processes.lock()
-            .map_err(|e| anyhow!("Process manager lock poisoned: {}", e))?
-            .insert(pid, handle);
+        let mut lock = self
+            .processes
+            .lock()
+            .map_err(|e| anyhow!("Process manager lock poisoned: {}", e))?;
+        Self::cleanup_stale_locked(&mut lock);
+        lock.insert(pid, handle);
         Ok(pid)
     }
 
@@ -131,9 +221,17 @@ impl ProcessManager {
     }
 
     pub fn read_output(&self, pid: u32) -> Result<String> {
-        let lock = self.processes.lock().map_err(|e| anyhow!("Process manager lock poisoned: {}", e))?;
+        let lock = self
+            .processes
+            .lock()
+            .map_err(|e| anyhow!("Process manager lock poisoned: {}", e))?;
+        let mut lock = lock;
+        Self::cleanup_stale_locked(&mut lock);
         if let Some(handle) = lock.get(&pid) {
-            let buffer = handle.output_buffer.lock().map_err(|e| anyhow!("Output buffer lock poisoned: {}", e))?;
+            let buffer = handle
+                .output_buffer
+                .lock()
+                .map_err(|e| anyhow!("Output buffer lock poisoned: {}", e))?;
             Ok(buffer.join("\n"))
         } else {
             Err(anyhow!("Process {} not found", pid))
@@ -142,7 +240,12 @@ impl ProcessManager {
 
     pub async fn write_input(&self, pid: u32, input: String) -> Result<()> {
         let tx = {
-            let lock = self.processes.lock().map_err(|e| anyhow!("Process manager lock poisoned: {}", e))?;
+            let lock = self
+                .processes
+                .lock()
+                .map_err(|e| anyhow!("Process manager lock poisoned: {}", e))?;
+            let mut lock = lock;
+            Self::cleanup_stale_locked(&mut lock);
             if let Some(handle) = lock.get(&pid) {
                 handle.input_tx.clone()
             } else {
@@ -156,7 +259,11 @@ impl ProcessManager {
 
     pub async fn kill(&self, pid: u32) -> Result<()> {
         let tx = {
-            let mut lock = self.processes.lock().map_err(|e| anyhow!("Process manager lock poisoned: {}", e))?;
+            let mut lock = self
+                .processes
+                .lock()
+                .map_err(|e| anyhow!("Process manager lock poisoned: {}", e))?;
+            Self::cleanup_stale_locked(&mut lock);
             if let Some(handle) = lock.remove(&pid) {
                 handle.kill_tx
             } else {
@@ -172,6 +279,9 @@ impl ProcessManager {
             .processes
             .lock()
             .map_err(|e| anyhow!("Process manager lock poisoned: {}", e))?;
+
+        let mut lock = lock;
+        Self::cleanup_stale_locked(&mut lock);
 
         let mut out = Vec::with_capacity(lock.len());
         for (pid, handle) in lock.iter() {
@@ -191,24 +301,24 @@ impl ProcessManager {
 
 // Tool Arguments
 #[derive(Serialize, Deserialize)]
-pub struct SpawnArgs {
+pub(super) struct SpawnArgs {
     pub command: String,
     pub args: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct PidArgs {
+pub(super) struct PidArgs {
     pub pid: u32,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct WriteInputArgs {
+pub(super) struct WriteInputArgs {
     pub pid: u32,
     pub input: String,
 }
 
 // Tool Functions
-pub async fn spawn_process(args: SpawnArgs) -> Result<String> {
+pub(super) async fn spawn_process(_token: &super::ExecutorToken, args: SpawnArgs) -> Result<String> {
     let args_vec = args.args.unwrap_or_default();
     let pid = PROCESS_MANAGER
         .spawn(args.command.clone(), args_vec)
@@ -216,21 +326,21 @@ pub async fn spawn_process(args: SpawnArgs) -> Result<String> {
     Ok(format!("Started process {} (PID: {})", args.command, pid))
 }
 
-pub async fn read_process_output(args: PidArgs) -> Result<String> {
+pub(super) async fn read_process_output(_token: &super::ExecutorToken, args: PidArgs) -> Result<String> {
     PROCESS_MANAGER.read_output(args.pid)
 }
 
-pub async fn write_process_input(args: WriteInputArgs) -> Result<String> {
+pub(super) async fn write_process_input(_token: &super::ExecutorToken, args: WriteInputArgs) -> Result<String> {
     PROCESS_MANAGER.write_input(args.pid, args.input).await?;
     Ok(format!("Sent input to PID {}", args.pid))
 }
 
-pub async fn terminate_process(args: PidArgs) -> Result<String> {
+pub(super) async fn terminate_process(_token: &super::ExecutorToken, args: PidArgs) -> Result<String> {
     PROCESS_MANAGER.kill(args.pid).await?;
     Ok(format!("Terminated PID {}", args.pid))
 }
 
-pub async fn list_processes() -> Result<String> {
+pub(super) async fn list_processes(_token: &super::ExecutorToken) -> Result<String> {
     let processes = PROCESS_MANAGER.list()?;
     Ok(serde_json::to_string(&serde_json::json!({
         "count": processes.len(),

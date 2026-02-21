@@ -1,0 +1,5 @@
+default_provider = "openai"
+context_token_limit = 32000
+
+[providers.openai]
+api_key = "smoke-test-placeholder"

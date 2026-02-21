@@ -1,13 +1,13 @@
+use super::adapter::{ChannelAdapter, ChannelMessage, build_session_id};
+use super::registry::ChannelRegistry;
 /// Telegram bot channel integration
 /// Uses HTTP polling to receive messages from Telegram
 use anyhow::Result;
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use teloxide::prelude::*;
 use tokio::sync::mpsc;
-use async_trait::async_trait;
-use std::sync::Arc;
-use super::adapter::{build_session_id, ChannelAdapter, ChannelMessage};
-use super::registry::ChannelRegistry;
 
 /// Telegram bot configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,9 +25,20 @@ pub struct TelegramBot {
     agent_tx: mpsc::Sender<crate::agent::AgentMessage>,
     registry: Arc<ChannelRegistry>,
     confirmation_service: Arc<tokio::sync::Mutex<crate::tools::ConfirmationService>>,
-    confirmation_txs: Arc<tokio::sync::Mutex<std::collections::HashMap<i64, mpsc::Sender<crate::tools::telegram_confirmation::CallbackResponse>>>>,
+    confirmation_txs: Arc<
+        tokio::sync::Mutex<
+            std::collections::HashMap<
+                i64,
+                mpsc::Sender<crate::tools::telegram_confirmation::CallbackResponse>,
+            >,
+        >,
+    >,
     confirmation_ready: Arc<tokio::sync::Mutex<std::collections::HashSet<i64>>>,
-    pending_questions: Arc<tokio::sync::Mutex<std::collections::HashMap<String, crate::tools::question::QuestionPayload>>>,
+    pending_questions: Arc<
+        tokio::sync::Mutex<
+            std::collections::HashMap<String, crate::tools::question::QuestionPayload>,
+        >,
+    >,
 }
 
 impl TelegramBot {
@@ -51,7 +62,6 @@ impl TelegramBot {
         }
     }
 
-
     /// Start the bot with dual-task architecture (Inbound + Outbound)
     pub async fn run(self) -> Result<()> {
         let bot = self.bot.clone();
@@ -73,15 +83,18 @@ impl TelegramBot {
         let outbound_handle = tokio::spawn(async move {
             tracing::info!("📤 Telegram Outbound Actor started");
             while let Some(msg) = inbox_rx.recv().await {
-                 let chat_id = msg.user_id.replace("telegram:", "").parse::<i64>();
-                 match chat_id {
+                let chat_id = msg.user_id.replace("telegram:", "").parse::<i64>();
+                match chat_id {
                     Ok(id) => {
-                        if let Err(e) = bot_clone.send_message(teloxide::types::ChatId(id), msg.content).await {
+                        if let Err(e) = bot_clone
+                            .send_message(teloxide::types::ChatId(id), msg.content)
+                            .await
+                        {
                             tracing::error!("Failed to send Telegram message: {}", e);
                         }
                     }
-                     Err(e) => tracing::error!("Invalid Telegram Chat ID {}: {}", msg.user_id, e),
-                 }
+                    Err(e) => tracing::error!("Invalid Telegram Chat ID {}: {}", msg.user_id, e),
+                }
             }
         });
 
@@ -89,17 +102,34 @@ impl TelegramBot {
         tracing::info!("📥 Telegram Inbound Poller started");
         teloxide::repl(bot, move |bot: Bot, msg: Message| {
             let agent_tx = agent_tx.clone();
-            let _allowed_users = allowed_users.clone();
+            let allowed_users = allowed_users.clone();
             let confirmation_service = confirmation_service.clone();
             let confirmation_txs = confirmation_txs.clone();
             let confirmation_ready = confirmation_ready.clone();
             let pending_questions = pending_questions.clone();
             let bot_token = bot_token.clone();
-            
+
             async move {
+                let ingress_at = std::time::Instant::now();
                 let user_id = msg.chat.id.0.to_string();
                 let username = msg.chat.username().map(|s| s.to_string());
                 let chat_id = msg.chat.id.0;
+
+                let sender_id = msg
+                    .from
+                    .as_ref()
+                    .map(|u| u.id.0 as i64)
+                    .unwrap_or(chat_id);
+
+                if let Some(allowlist) = allowed_users.as_ref()
+                    && !allowlist.contains(&sender_id)
+                {
+                    tracing::warn!(
+                        "Blocked Telegram message from unauthorized user {}",
+                        sender_id
+                    );
+                    return Ok(());
+                }
 
                 // Ensure confirmation adapter for this chat
                 {
@@ -152,7 +182,8 @@ impl TelegramBot {
                 // Normal Message Handling
                 let mut text = match msg.text() { Some(t) => t.to_string(), None => return Ok(()) };
                 let user_id = msg
-                    .from()
+                    .from
+                    .as_ref()
                     .map(|u| u.id.0.to_string())
                     .unwrap_or_else(|| msg.chat.id.0.to_string());
 
@@ -190,6 +221,21 @@ impl TelegramBot {
                     return Ok(());
                 }
 
+                let skill_scope = format!("telegram:{}:{}", chat_id, user_id);
+                match crate::gateway::skill_chat::handle_skill_slash_command(&skill_scope, &text).await {
+                    Ok(Some(reply)) => {
+                        let _ = bot.send_message(msg.chat.id, reply).await;
+                        return Ok(());
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        let _ = bot
+                            .send_message(msg.chat.id, format!("❌ Skill command error: {}", e))
+                            .await;
+                        return Ok(());
+                    }
+                }
+
                 let session_id = build_session_id(
                     "telegram",
                     &msg.chat.id.0.to_string(),
@@ -219,19 +265,69 @@ impl TelegramBot {
                 }
 
                 if let Some(token) = text.strip_prefix("/set_admin_token ") {
-                    let token = token.trim();
-                    if token.is_empty() {
-                        let _ = bot.send_message(msg.chat.id, "❌ Token cannot be empty").await;
+                    let parts: Vec<&str> = token.split_whitespace().collect();
+                    let has_existing_admin = std::env::var("NANOBOT_ADMIN_TOKEN")
+                        .ok()
+                        .filter(|v| !v.trim().is_empty())
+                        .is_some()
+                        || crate::security::read_admin_token()
+                            .ok()
+                            .flatten()
+                            .map(|v| !v.trim().is_empty())
+                            .unwrap_or(false);
+
+                    if !has_existing_admin {
+                        let new_token = parts.first().map(|s| s.trim()).unwrap_or("");
+                        if new_token.is_empty() {
+                            let _ = bot
+                                .send_message(
+                                    msg.chat.id,
+                                    "❌ First-time setup: /set_admin_token <new_token>",
+                                )
+                                .await;
+                            return Ok(());
+                        }
+                        if let Err(e) = crate::security::write_admin_token(new_token) {
+                            let _ = bot.send_message(msg.chat.id, format!("❌ Failed to save token: {}", e)).await;
+                            return Ok(());
+                        }
+                        let _ = bot.send_message(msg.chat.id, "✅ Admin token saved (first-time setup)").await;
                         return Ok(());
                     }
-                    if let Err(e) = crate::security::write_admin_token(token) {
+
+                    if parts.len() < 2 {
+                        let _ = bot
+                            .send_message(
+                                msg.chat.id,
+                                "❌ Usage: /set_admin_token <current_token_or_primary_password> <new_token>\nExample: /set_admin_token mypassword newtoken123",
+                            )
+                            .await;
+                        return Ok(());
+                    }
+                    let current = parts[0].trim();
+                    let new_token = parts[1].trim();
+                    if new_token.is_empty() {
+                        let _ = bot
+                            .send_message(msg.chat.id, "❌ New token cannot be empty")
+                            .await;
+                        return Ok(());
+                    }
+
+                    if !crate::security::verify_admin_rotation_secret(current) {
+                        let _ = bot
+                            .send_message(msg.chat.id, "❌ Current token/password is invalid")
+                            .await;
+                        return Ok(());
+                    }
+
+                    if let Err(e) = crate::security::write_admin_token(new_token) {
                         let _ = bot.send_message(msg.chat.id, format!("❌ Failed to save token: {}", e)).await;
                         return Ok(());
                     }
                     let _ = bot.send_message(msg.chat.id, "✅ Admin token saved").await;
                     return Ok(());
                 }
-                
+
                 // Typing
                 let _ = bot.send_chat_action(msg.chat.id, teloxide::types::ChatAction::Typing).await;
 
@@ -240,8 +336,10 @@ impl TelegramBot {
                 let agent_msg = crate::agent::AgentMessage {
                     session_id: session_id.clone(),
                     tenant_id: session_id.clone(),
+                    request_id: uuid::Uuid::new_v4().to_string(),
                     content: text,
                     response_tx,
+                    ingress_at,
                 };
 
                 if agent_tx.send(agent_msg).await.is_err() {
@@ -301,7 +399,9 @@ fn parse_confirmation_response(text: &str) -> Option<(bool, String)> {
 impl ChannelAdapter for TelegramBot {
     async fn send_message(&self, user_id: &str, content: &str) -> Result<()> {
         let chat_id = user_id.replace("telegram:", "").parse::<i64>()?;
-        self.bot.send_message(teloxide::types::ChatId(chat_id), content).await?;
+        self.bot
+            .send_message(teloxide::types::ChatId(chat_id), content)
+            .await?;
         Ok(())
     }
 
@@ -309,11 +409,14 @@ impl ChannelAdapter for TelegramBot {
         Ok(())
     }
 
-    fn channel_name(&self) -> &str { "telegram" }
-    
-    fn format_user_id(&self, raw_id: &str) -> String { format!("telegram:{}", raw_id) }
-}
+    fn channel_name(&self) -> &str {
+        "telegram"
+    }
 
+    fn format_user_id(&self, raw_id: &str) -> String {
+        format!("telegram:{}", raw_id)
+    }
+}
 
 #[cfg(test)]
 mod tests {

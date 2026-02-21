@@ -1,6 +1,6 @@
+use anyhow::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::signal;
-use anyhow::Result;
 
 /// Global shutdown signal
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);
@@ -21,11 +21,11 @@ pub fn request_shutdown() {
 pub async fn setup_shutdown_handler() -> Result<()> {
     #[cfg(unix)]
     {
-        use signal::unix::{signal, SignalKind};
-        
+        use signal::unix::{SignalKind, signal};
+
         let mut sigterm = signal(SignalKind::terminate())?;
         let mut sigint = signal(SignalKind::interrupt())?;
-        
+
         tokio::select! {
             _ = sigterm.recv() => {
                 tracing::info!("Received SIGTERM");
@@ -35,13 +35,13 @@ pub async fn setup_shutdown_handler() -> Result<()> {
             }
         }
     }
-    
+
     #[cfg(windows)]
     {
         signal::ctrl_c().await?;
         tracing::info!("Received Ctrl+C");
     }
-    
+
     request_shutdown();
     Ok(())
 }
@@ -57,16 +57,16 @@ impl ShutdownCoordinator {
             handles: Vec::new(),
         }
     }
-    
+
     /// Add a task handle to track
     pub fn add_handle(&mut self, handle: tokio::task::JoinHandle<()>) {
         self.handles.push(handle);
     }
-    
+
     /// Wait for all tasks to complete gracefully
     pub async fn shutdown(self, timeout_secs: u64) {
         tracing::info!("Beginning graceful shutdown (timeout: {}s)", timeout_secs);
-        
+
         let shutdown_future = async {
             for handle in self.handles {
                 if let Err(e) = handle.await {
@@ -74,11 +74,13 @@ impl ShutdownCoordinator {
                 }
             }
         };
-        
+
         match tokio::time::timeout(
             tokio::time::Duration::from_secs(timeout_secs),
-            shutdown_future
-        ).await {
+            shutdown_future,
+        )
+        .await
+        {
             Ok(_) => {
                 tracing::info!("All tasks shut down successfully");
             }

@@ -47,8 +47,11 @@ pub async fn run_discord_setup_wizard() -> Result<()> {
     }
 
     println!();
-    println!("{}", style("✅ Discord configured successfully!").green().bold());
+    println!(
+        "{}",
+        style("✅ Discord configured successfully!").green().bold()
+    );
     println!("{}", style(format!("   Application ID: {}", app_id)).cyan());
-    
+
     Ok(())
 }

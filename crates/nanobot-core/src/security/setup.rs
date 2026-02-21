@@ -5,11 +5,11 @@ use std::io::{self, Write};
 
 /// Setup wizard for secrets encryption
 pub fn run_setup_wizard() -> Result<()> {
-    println!("");
+    println!();
     println!("🔐 Nanobot Secrets Encryption Setup");
     println!("{}", "=".repeat(50));
     println!("This wizard will help you secure your API keys and tokens.");
-    println!("");
+    println!();
 
     // Check if salt already exists
     let salt_path = SecretManager::salt_path();
@@ -28,11 +28,11 @@ pub fn run_setup_wizard() -> Result<()> {
     }
 
     // Prompt for master password
-    println!("");
+    println!();
     println!("Step 1: Create Master Password");
     println!("This password will encrypt your secrets.");
     println!("You'll need it every time you start nanobot.");
-    println!("");
+    println!();
 
     print!("Enter master password: ");
     io::stdout().flush()?;
@@ -56,13 +56,13 @@ pub fn run_setup_wizard() -> Result<()> {
     if let Some(parent) = salt_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&salt_path, &salt)?;
+    std::fs::write(&salt_path, salt)?;
 
     let manager = SecretManager::new(&password, &salt)?;
 
-    println!("");
+    println!();
     println!("✅ Master password set!");
-    println!("");
+    println!();
 
     // Migrate existing secrets
     println!("Step 2: Migrate Existing Secrets");
@@ -71,30 +71,54 @@ pub fn run_setup_wizard() -> Result<()> {
     let migrated = migrate_secrets(&manager, &config_path)?;
 
     if migrated {
-        println!("");
+        println!();
         println!("✅ Secrets migration complete!");
     } else {
         println!("No existing secrets found to migrate.");
     }
 
     // Summary
-    println!("");
+    println!();
     println!("{}", "=".repeat(50));
     println!("Setup Complete!");
     println!("Your secrets are now encrypted.");
     println!("Set NANOBOT_MASTER_PASSWORD env var to skip password prompt.");
-    println!("");
+    println!();
 
     Ok(())
+}
+
+/// Configure the master password if encryption has not been initialized yet.
+/// Returns true if a new master password/salt was created, false if already configured.
+pub fn setup_master_password_if_missing(password: &str) -> Result<bool> {
+    if password.trim().len() < 8 {
+        return Err(anyhow::anyhow!(
+            "Primary password must be at least 8 characters"
+        ));
+    }
+
+    let salt_path = SecretManager::salt_path();
+    if salt_path.exists() {
+        return Ok(false);
+    }
+
+    let salt = SecretManager::generate_salt();
+    if let Some(parent) = salt_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&salt_path, salt)?;
+
+    let manager = SecretManager::new(password.trim(), &salt)?;
+    let config_path = crate::config::Config::config_path();
+    let _ = migrate_secrets(&manager, &config_path)?;
+    Ok(true)
 }
 
 fn migrate_secrets(manager: &SecretManager, config_path: &std::path::PathBuf) -> Result<bool> {
     let mut migrated = false;
 
     // Migrate tokens.json
-    let tokens_path = std::path::PathBuf::from(".")
-        .join(".nanobot")
-        .join("tokens.json");
+    let tokens_path = crate::config::OAuthTokens::token_path();
     if tokens_path.exists() {
         println!("  Migrating tokens.json...");
         EncryptedSecrets::migrate_from_plaintext(manager)?;
@@ -115,12 +139,12 @@ fn migrate_secrets(manager: &SecretManager, config_path: &std::path::PathBuf) ->
 pub fn verify_password() -> Result<SecretManager> {
     let salt = SecretManager::load_or_create_salt()?;
 
-    // Try environment variable first
-    if let Ok(password) = std::env::var("NANOBOT_MASTER_PASSWORD") {
+    // Try primary password sources first
+    if let Some(password) = crate::security::read_primary_password() {
         match SecretManager::new(&password, &salt) {
             Ok(manager) => return Ok(manager),
             Err(_) => {
-                eprintln!("❌ Invalid password in NANOBOT_MASTER_PASSWORD");
+                println!("❌ Invalid configured primary password");
                 return Err(anyhow::anyhow!("Invalid master password"));
             }
         }

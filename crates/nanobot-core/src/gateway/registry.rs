@@ -1,8 +1,8 @@
+use crate::gateway::adapter::ChannelMessage;
+use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
-use anyhow::Result;
-use crate::gateway::adapter::ChannelMessage;
+use tokio::sync::{RwLock, mpsc};
 
 /// Registry for all active channel adapters (Actors)
 /// Allows any component to lookup a channel's inbox and send messages to it.
@@ -35,16 +35,25 @@ impl ChannelRegistry {
     /// Helper: Directly send a message to a channel if it exists
     pub async fn send(&self, channel_name: &str, message: ChannelMessage) -> Result<()> {
         if let Some(sender) = self.get(channel_name).await {
-            sender.send(message).await.map_err(|_| anyhow::anyhow!("Channel {} closed", channel_name))?;
+            sender
+                .send(message)
+                .await
+                .map_err(|_| anyhow::anyhow!("Channel {} closed", channel_name))?;
             Ok(())
         } else {
             Err(anyhow::anyhow!("Channel {} not found", channel_name))
         }
     }
-    
+
     /// List all registered channels
     pub async fn list_channels(&self) -> Vec<String> {
         let map = self.adapters.read().await;
         map.keys().cloned().collect()
+    }
+}
+
+impl Default for ChannelRegistry {
+    fn default() -> Self {
+        Self::new()
     }
 }

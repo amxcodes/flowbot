@@ -1,0 +1,8 @@
+sampled_reject_events=150
+Segment                              p50(ms)  p95(ms)  avg(ms)
+---------------------------------------------------------------
+recv_to_handler_start_ms                0.00     3.00     1.15
+handler_start_to_deadline_expired_ms 1010.00  1276.85  1101.21
+deadline_expired_to_reject_emit_ms      0.00     0.00     0.00
+reject_emit_to_ws_send_complete_ms      0.00     0.00     0.00
+total_recv_to_ws_send_ms             1011.00  1276.85  1102.81

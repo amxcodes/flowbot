@@ -14,7 +14,11 @@ pub struct WorkspaceWatcher {
 }
 
 impl WorkspaceWatcher {
-    pub fn new(root_path: PathBuf, memory_manager: Arc<MemoryManager>, tenant_id: Option<String>) -> Result<Self> {
+    pub fn new(
+        root_path: PathBuf,
+        memory_manager: Arc<MemoryManager>,
+        tenant_id: Option<String>,
+    ) -> Result<Self> {
         let (tx, mut rx) = mpsc::unbounded_channel();
 
         // Create the watcher
@@ -32,7 +36,7 @@ impl WorkspaceWatcher {
         let root = root_path.clone();
         let tenant = tenant_id.ok_or_else(|| anyhow::anyhow!("tenant_id is required"))?;
         let tenant_clone = tenant.clone();
-        
+
         tokio::spawn(async move {
             // Simple debounce logic could go here, for now processing raw events
             // Real-world: use a debounce crate or hashmap<path, instant>
@@ -42,7 +46,10 @@ impl WorkspaceWatcher {
             }
         });
 
-        Ok(Self { _watcher: watcher, tenant_id: tenant })
+        Ok(Self {
+            _watcher: watcher,
+            tenant_id: tenant,
+        })
     }
 }
 
@@ -69,7 +76,10 @@ async fn handle_event(event: Event, root: &Path, memory: &Arc<MemoryManager>, te
                     match tokio::fs::read_to_string(&path).await {
                         Ok(content) => {
                             debug!("Indexing changed file: {}", rel_path);
-                            if let Err(e) = memory.update_document(&rel_path, &content, Some(tenant_id)).await {
+                            if let Err(e) = memory
+                                .update_document(&rel_path, &content, Some(tenant_id))
+                                .await
+                            {
                                 error!("Failed to update document {}: {}", rel_path, e);
                             }
                         }

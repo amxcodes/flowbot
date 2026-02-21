@@ -6,7 +6,7 @@ pub struct ToolGuard;
 
 impl ToolGuard {
     pub fn guarded_tool_names() -> Vec<&'static str> {
-        vec![
+        let names = vec![
             "run_command",
             "spawn_process",
             "write_file",
@@ -52,7 +52,25 @@ impl ToolGuard {
             "llm_task",
             "tts",
             "stt",
-        ]
+        ];
+
+        #[cfg(feature = "browser")]
+        {
+            let mut names = names;
+            names.extend([
+                "browser_navigate",
+                "browser_click",
+                "browser_type",
+                "browser_screenshot",
+                "browser_evaluate",
+                "browser_pdf",
+                "browser_list_tabs",
+                "browser_switch_tab",
+            ]);
+            return names;
+        }
+
+        names
     }
 
     /// Validate tool arguments against expected schema
@@ -80,46 +98,69 @@ impl ToolGuard {
                 Self::validate_string_arg(args, "question")?;
             }
             "apply_patch" => {
-                let ops = args
-                    .get("operations")
-                    .and_then(|v| v.as_array())
-                    .ok_or_else(|| anyhow::anyhow!("Missing 'operations' array"))?;
-                if ops.is_empty() {
-                    return Err(anyhow::anyhow!("operations cannot be empty"));
-                }
-                for (idx, op) in ops.iter().enumerate() {
-                    if let Some(v) = op.get("before_context") {
-                        let s = v.as_str().ok_or_else(|| {
-                            anyhow::anyhow!("operations[{}].before_context must be a string", idx)
+                let patch_text = args
+                    .get("patch")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| args.get("patch_text").and_then(|v| v.as_str()))
+                    .or_else(|| args.get("patchText").and_then(|v| v.as_str()));
+
+                if let Some(patch) = patch_text {
+                    if patch.trim().is_empty() {
+                        return Err(anyhow::anyhow!("patch text cannot be empty"));
+                    }
+                    if patch.len() > 2_000_000 {
+                        return Err(anyhow::anyhow!("patch text too large (max 2MB)"));
+                    }
+                } else {
+                    let ops = args
+                        .get("operations")
+                        .and_then(|v| v.as_array())
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("Missing 'operations' array or 'patch' text")
                         })?;
-                        if s.len() > 1000 {
-                            return Err(anyhow::anyhow!(
-                                "operations[{}].before_context too large (max 1000 chars)",
-                                idx
-                            ));
+                    if ops.is_empty() {
+                        return Err(anyhow::anyhow!("operations cannot be empty"));
+                    }
+                    for (idx, op) in ops.iter().enumerate() {
+                        if let Some(v) = op.get("before_context") {
+                            let s = v.as_str().ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "operations[{}].before_context must be a string",
+                                    idx
+                                )
+                            })?;
+                            if s.len() > 1000 {
+                                return Err(anyhow::anyhow!(
+                                    "operations[{}].before_context too large (max 1000 chars)",
+                                    idx
+                                ));
+                            }
+                        }
+                        if let Some(v) = op.get("after_context") {
+                            let s = v.as_str().ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "operations[{}].after_context must be a string",
+                                    idx
+                                )
+                            })?;
+                            if s.len() > 1000 {
+                                return Err(anyhow::anyhow!(
+                                    "operations[{}].after_context too large (max 1000 chars)",
+                                    idx
+                                ));
+                            }
                         }
                     }
-                    if let Some(v) = op.get("after_context") {
-                        let s = v.as_str().ok_or_else(|| {
-                            anyhow::anyhow!("operations[{}].after_context must be a string", idx)
-                        })?;
-                        if s.len() > 1000 {
-                            return Err(anyhow::anyhow!(
-                                "operations[{}].after_context too large (max 1000 chars)",
-                                idx
-                            ));
-                        }
-                    }
                 }
-                if let Some(v) = args.get("dry_run").or_else(|| args.get("dryRun")) {
-                    if !v.is_boolean() {
-                        return Err(anyhow::anyhow!("dry_run must be a boolean"));
-                    }
+                if let Some(v) = args.get("dry_run").or_else(|| args.get("dryRun"))
+                    && !v.is_boolean()
+                {
+                    return Err(anyhow::anyhow!("dry_run must be a boolean"));
                 }
-                if let Some(v) = args.get("atomic") {
-                    if !v.is_boolean() {
-                        return Err(anyhow::anyhow!("atomic must be a boolean"));
-                    }
+                if let Some(v) = args.get("atomic")
+                    && !v.is_boolean()
+                {
+                    return Err(anyhow::anyhow!("atomic must be a boolean"));
                 }
             }
             "todowrite" => {
@@ -183,13 +224,13 @@ impl ToolGuard {
                         ));
                     }
 
-                    if let Some(inner_args) = obj.get("args").and_then(|v| v.as_object()) {
-                        if inner_args.contains_key("tool") {
-                            return Err(anyhow::anyhow!(
-                                "tool_calls[{}].args cannot include reserved key 'tool'",
-                                idx
-                            ));
-                        }
+                    if let Some(inner_args) = obj.get("args").and_then(|v| v.as_object())
+                        && inner_args.contains_key("tool")
+                    {
+                        return Err(anyhow::anyhow!(
+                            "tool_calls[{}].args cannot include reserved key 'tool'",
+                            idx
+                        ));
                     }
                 }
 
@@ -204,18 +245,17 @@ impl ToolGuard {
             }
             "task" => {
                 Self::validate_string_arg(args, "prompt")?;
-                if let Some(v) = args.get("description") {
-                    if !v.is_string() {
-                        return Err(anyhow::anyhow!("description must be a string"));
-                    }
+                if let Some(v) = args.get("description")
+                    && !v.is_string()
+                {
+                    return Err(anyhow::anyhow!("description must be a string"));
                 }
                 if let Some(v) = args
                     .get("subagent_type")
                     .or_else(|| args.get("subagentType"))
+                    && !v.is_string()
                 {
-                    if !v.is_string() {
-                        return Err(anyhow::anyhow!("subagent_type must be a string"));
-                    }
+                    return Err(anyhow::anyhow!("subagent_type must be a string"));
                 }
                 if let Some(v) = args
                     .get("timeout_seconds")
@@ -267,15 +307,92 @@ impl ToolGuard {
                                 ));
                             }
                         }
-                        if let Some(v) = args.get("description") {
-                            if !v.is_string() {
-                                return Err(anyhow::anyhow!("description must be a string"));
-                            }
+                        if let Some(v) = args.get("description")
+                            && !v.is_string()
+                        {
+                            return Err(anyhow::anyhow!("description must be a string"));
                         }
                         if let Some(v) = args.get("auto_enable").or_else(|| args.get("autoEnable"))
+                            && !v.is_boolean()
                         {
-                            if !v.is_boolean() {
-                                return Err(anyhow::anyhow!("auto_enable must be a boolean"));
+                            return Err(anyhow::anyhow!("auto_enable must be a boolean"));
+                        }
+                    }
+                    "install" => {
+                        if args.get("name").is_none() && args.get("skill").is_none() {
+                            return Err(anyhow::anyhow!(
+                                "Missing 'name' (or legacy 'skill') field"
+                            ));
+                        }
+                        if let Some(v) = args.get("name")
+                            && (!v.is_string() || v.as_str().unwrap_or("").trim().is_empty())
+                        {
+                            return Err(anyhow::anyhow!("name must be a non-empty string"));
+                        }
+                        if let Some(v) = args.get("skill")
+                            && (!v.is_string() || v.as_str().unwrap_or("").trim().is_empty())
+                        {
+                            return Err(anyhow::anyhow!("skill must be a non-empty string"));
+                        }
+                        if let Some(v) = args.get("repo")
+                            && !v.is_string()
+                        {
+                            return Err(anyhow::anyhow!("repo must be a string"));
+                        }
+                        if let Some(v) = args.get("auto_enable").or_else(|| args.get("autoEnable"))
+                            && !v.is_boolean()
+                        {
+                            return Err(anyhow::anyhow!("auto_enable must be a boolean"));
+                        }
+                        if let Some(v) = args.get("bootstrap")
+                            && !v.is_boolean()
+                        {
+                            return Err(anyhow::anyhow!("bootstrap must be a boolean"));
+                        }
+                        if let Some(v) = args.get("runtime") {
+                            let runtime = v
+                                .as_str()
+                                .ok_or_else(|| anyhow::anyhow!("runtime must be a string"))?;
+                            let valid = ["deno", "node", "native", "mcp"];
+                            if !valid.iter().any(|s| s.eq_ignore_ascii_case(runtime)) {
+                                return Err(anyhow::anyhow!(
+                                    "runtime must be one of: deno, node, native, mcp"
+                                ));
+                            }
+                        }
+                        if let Some(credentials) = args.get("credentials") {
+                            let obj = credentials
+                                .as_object()
+                                .ok_or_else(|| anyhow::anyhow!("credentials must be an object"))?;
+                            if !obj.values().all(|v| v.is_string()) {
+                                return Err(anyhow::anyhow!("credentials values must be strings"));
+                            }
+                        }
+                    }
+                    "configure" => {
+                        Self::validate_string_arg(args, "name")?;
+                        if let Some(v) = args.get("enabled")
+                            && !v.is_boolean()
+                        {
+                            return Err(anyhow::anyhow!("enabled must be a boolean"));
+                        }
+                        if let Some(v) = args.get("runtime") {
+                            let runtime = v
+                                .as_str()
+                                .ok_or_else(|| anyhow::anyhow!("runtime must be a string"))?;
+                            let valid = ["deno", "node", "native", "mcp"];
+                            if !valid.iter().any(|s| s.eq_ignore_ascii_case(runtime)) {
+                                return Err(anyhow::anyhow!(
+                                    "runtime must be one of: deno, node, native, mcp"
+                                ));
+                            }
+                        }
+                        if let Some(credentials) = args.get("credentials") {
+                            let obj = credentials
+                                .as_object()
+                                .ok_or_else(|| anyhow::anyhow!("credentials must be an object"))?;
+                            if !obj.values().all(|v| v.is_string()) {
+                                return Err(anyhow::anyhow!("credentials values must be strings"));
                             }
                         }
                     }
@@ -286,15 +403,26 @@ impl ToolGuard {
                     "run" => {
                         Self::validate_string_arg(args, "name")?;
                         Self::validate_string_arg_any(args, &["tool_name", "toolName"])?;
-                        if let Some(v) = args.get("arguments") {
-                            if !v.is_object() {
-                                return Err(anyhow::anyhow!("arguments must be an object"));
-                            }
+                        if let Some(v) = args.get("arguments")
+                            && !v.is_object()
+                        {
+                            return Err(anyhow::anyhow!("arguments must be an object"));
+                        }
+                    }
+                    "set_runtime" => {
+                        Self::validate_string_arg(args, "name")?;
+                        Self::validate_string_arg(args, "runtime")?;
+                        let runtime = args["runtime"].as_str().unwrap_or_default();
+                        let valid = ["deno", "node", "native", "mcp"];
+                        if !valid.iter().any(|s| s.eq_ignore_ascii_case(runtime)) {
+                            return Err(anyhow::anyhow!(
+                                "runtime must be one of: deno, node, native, mcp"
+                            ));
                         }
                     }
                     _ => {
                         return Err(anyhow::anyhow!(
-                            "action must be one of: create, list, show, enable, disable, run"
+                            "action must be one of: create, install, configure, list, show, enable, disable, set_runtime, run"
                         ));
                     }
                 }
@@ -367,29 +495,27 @@ impl ToolGuard {
                 if let Some(v) = args
                     .get("timeout_seconds")
                     .or_else(|| args.get("timeoutSeconds"))
+                    && !v.is_u64()
                 {
-                    if !v.is_u64() {
-                        return Err(anyhow::anyhow!(
-                            "timeout_seconds must be a positive integer"
-                        ));
-                    }
+                    return Err(anyhow::anyhow!(
+                        "timeout_seconds must be a positive integer"
+                    ));
                 }
-                if let Some(v) = args.get("max_retries").or_else(|| args.get("maxRetries")) {
-                    if !v.is_u64() {
-                        return Err(anyhow::anyhow!(
-                            "max_retries must be a non-negative integer"
-                        ));
-                    }
+                if let Some(v) = args.get("max_retries").or_else(|| args.get("maxRetries"))
+                    && !v.is_u64()
+                {
+                    return Err(anyhow::anyhow!(
+                        "max_retries must be a non-negative integer"
+                    ));
                 }
                 if let Some(v) = args
                     .get("retry_backoff_ms")
                     .or_else(|| args.get("retryBackoffMs"))
+                    && !v.is_u64()
                 {
-                    if !v.is_u64() {
-                        return Err(anyhow::anyhow!(
-                            "retry_backoff_ms must be a non-negative integer"
-                        ));
-                    }
+                    return Err(anyhow::anyhow!(
+                        "retry_backoff_ms must be a non-negative integer"
+                    ));
                 }
             }
             "get_subagent_result" => {
@@ -424,10 +550,10 @@ impl ToolGuard {
             }
             "sessions_history" | "session_status" => {
                 // Optional session_id; if provided must be string
-                if let Some(val) = args.get("session_id").or_else(|| args.get("sessionId")) {
-                    if !val.is_string() {
-                        return Err(anyhow::anyhow!("session_id must be a string"));
-                    }
+                if let Some(val) = args.get("session_id").or_else(|| args.get("sessionId"))
+                    && !val.is_string()
+                {
+                    return Err(anyhow::anyhow!("session_id must be a string"));
                 }
             }
             "sessions_list" | "agents_list" => {}
@@ -439,10 +565,10 @@ impl ToolGuard {
             }
             "tts" => {
                 Self::validate_string_arg(args, "text")?;
-                if let Some(val) = args.get("output_path") {
-                    if !val.is_string() {
-                        return Err(anyhow::anyhow!("output_path must be a string"));
-                    }
+                if let Some(val) = args.get("output_path")
+                    && !val.is_string()
+                {
+                    return Err(anyhow::anyhow!("output_path must be a string"));
                 }
             }
             "stt" => {
@@ -503,10 +629,10 @@ impl ToolGuard {
             return Ok(());
         }
 
-        if let Some(s) = value.as_str() {
-            if s.parse::<u32>().is_ok() {
-                return Ok(());
-            }
+        if let Some(s) = value.as_str()
+            && s.parse::<u32>().is_ok()
+        {
+            return Ok(());
         }
 
         Err(anyhow::anyhow!(
@@ -525,16 +651,60 @@ impl ToolGuard {
             return Err(anyhow::anyhow!("Command must be a string"));
         }
 
-        let cmd_str = cmd.as_str().unwrap();
+        let raw_cmd = cmd.as_str().unwrap().trim();
+        if raw_cmd.is_empty() {
+            return Err(anyhow::anyhow!("Command cannot be empty"));
+        }
+
+        // Backward compatibility: allow `cmd` to be either a bare binary name
+        // or a shell-style command string like "ls -la".
+        let cmd_str = raw_cmd.split_whitespace().next().unwrap_or(raw_cmd).trim();
+
         if cmd_str.is_empty() {
             return Err(anyhow::anyhow!("Command cannot be empty"));
         }
 
-        // Warn about dangerous patterns (but don't block)
+        if !super::commands::command_allowed(cmd_str) {
+            return Err(anyhow::anyhow!(
+                "Command '{}' is not in the allowed whitelist.",
+                cmd_str
+            ));
+        }
+
+        let parsed_args = args
+            .get("args")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .map(|v| {
+                        v.as_str()
+                            .map(|s| s.to_string())
+                            .ok_or_else(|| anyhow::anyhow!("args must be an array of strings"))
+                    })
+                    .collect::<Result<Vec<String>>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+
+        if super::commands::dangerous_command_detected(cmd_str, &parsed_args)
+            && std::env::var("NANOBOT_ALLOW_DANGEROUS_COMMANDS")
+                .ok()
+                .as_deref()
+                != Some("1")
+        {
+            return Err(anyhow::anyhow!(
+                "Blocked dangerous command. Set NANOBOT_ALLOW_DANGEROUS_COMMANDS=1 to override explicitly."
+            ));
+        }
+
+        // Block known dangerous patterns by default
         let dangerous_patterns = ["rm -rf /", "format", "del /f /s /q"];
         for pattern in &dangerous_patterns {
             if cmd_str.contains(pattern) {
-                tracing::warn!("⚠️ Detected potentially dangerous command: {}", pattern);
+                return Err(anyhow::anyhow!(
+                    "Blocked dangerous command pattern: {}",
+                    pattern
+                ));
             }
         }
 

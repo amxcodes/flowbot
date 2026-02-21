@@ -3,7 +3,7 @@ use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GlobArgs {
+pub(super) struct GlobArgs {
     pub pattern: String,
     #[serde(default)]
     pub path: Option<String>,
@@ -12,7 +12,7 @@ pub struct GlobArgs {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GrepArgs {
+pub(super) struct GrepArgs {
     pub pattern: String,
     #[serde(default)]
     pub path: Option<String>,
@@ -31,7 +31,7 @@ struct GrepMatch {
     text: String,
 }
 
-pub async fn glob_files(args: GlobArgs) -> Result<String> {
+pub(super) async fn glob_files(_token: &super::ExecutorToken, args: GlobArgs) -> Result<String> {
     let root = if let Some(path) = &args.path {
         super::validate_path(path)?
     } else {
@@ -42,7 +42,10 @@ pub async fn glob_files(args: GlobArgs) -> Result<String> {
         return Err(anyhow::anyhow!("Path does not exist: {}", root.display()));
     }
     if !root.is_dir() {
-        return Err(anyhow::anyhow!("Path is not a directory: {}", root.display()));
+        return Err(anyhow::anyhow!(
+            "Path is not a directory: {}",
+            root.display()
+        ));
     }
 
     let pattern = glob::Pattern::new(&args.pattern)
@@ -73,7 +76,7 @@ pub async fn glob_files(args: GlobArgs) -> Result<String> {
     }))?)
 }
 
-pub async fn grep_files(args: GrepArgs) -> Result<String> {
+pub(super) async fn grep_files(_token: &super::ExecutorToken, args: GrepArgs) -> Result<String> {
     let root = if let Some(path) = &args.path {
         super::validate_path(path)?
     } else {
@@ -84,7 +87,10 @@ pub async fn grep_files(args: GrepArgs) -> Result<String> {
         return Err(anyhow::anyhow!("Path does not exist: {}", root.display()));
     }
     if !root.is_dir() {
-        return Err(anyhow::anyhow!("Path is not a directory: {}", root.display()));
+        return Err(anyhow::anyhow!(
+            "Path is not a directory: {}",
+            root.display()
+        ));
     }
 
     let regex = RegexBuilder::new(&args.pattern)
@@ -113,10 +119,10 @@ pub async fn grep_files(args: GrepArgs) -> Result<String> {
         let rel = path.strip_prefix(&root).unwrap_or(path);
         let rel_norm = rel.to_string_lossy().replace('\\', "/");
 
-        if let Some(pat) = include_pattern.as_ref() {
-            if !pat.matches(&rel_norm) {
-                continue;
-            }
+        if let Some(pat) = include_pattern.as_ref()
+            && !pat.matches(&rel_norm)
+        {
+            continue;
         }
 
         let content = match std::fs::read_to_string(path) {

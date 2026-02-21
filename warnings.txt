@@ -1,0 +1,436 @@
+warning: method `hit_rate` is never used
+  --> crates\nanobot-core\src\cache\mod.rs:26:12
+   |
+25 | impl CacheStats {
+   | --------------- method in this implementation
+26 |     pub fn hit_rate(&self) -> f64 {
+   |            ^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: multiple methods are never used
+   --> crates\nanobot-core\src\cache\mod.rs:103:18
+    |
+ 62 | / impl<K, V> ConcurrentCache<K, V>
+ 63 | | where
+ 64 | |     K: Eq + Hash + Clone,
+ 65 | |     V: Clone,
+    | |_____________- methods in this implementation
+...
+103 |       pub async fn insert_with_ttl(&self, key: K, value: V, ttl: Duration) {
+    |                    ^^^^^^^^^^^^^^^
+...
+109 |       pub fn remove(&self, key: &K) -> Option<V> {
+    |              ^^^^^^
+...
+114 |       pub fn clear(&self) {
+    |              ^^^^^
+...
+119 |       pub async fn stats(&self) -> CacheStats {
+    |                    ^^^^^
+...
+124 |       pub async fn cleanup_expired(&self) {
+    |                    ^^^^^^^^^^^^^^^
+...
+139 |       pub fn len(&self) -> usize {
+    |              ^^^
+...
+143 |       pub fn is_empty(&self) -> bool {
+    |              ^^^^^^^^
+
+warning: struct `AsyncLruCache` is never constructed
+   --> crates\nanobot-core\src\cache\mod.rs:149:12
+    |
+149 | pub struct AsyncLruCache<K, V> {
+    |            ^^^^^^^^^^^^^
+
+warning: associated items `new`, `get`, `put`, and `stats` are never used
+   --> crates\nanobot-core\src\cache\mod.rs:159:12
+    |
+154 | / impl<K, V> AsyncLruCache<K, V>
+155 | | where
+156 | |     K: Eq + Hash + Clone,
+157 | |     V: Clone,
+    | |_____________- associated items in this implementation
+158 |   {
+159 |       pub fn new(capacity: NonZeroUsize) -> Self {
+    |              ^^^
+...
+166 |       pub async fn get(&self, key: &K) -> Option<V> {
+    |                    ^^^
+...
+180 |       pub async fn put(&self, key: K, value: V) {
+    |                    ^^^
+...
+188 |       pub async fn stats(&self) -> CacheStats {
+    |                    ^^^^^
+
+warning: fields `deterministic` and `file_cache` are never read
+   --> crates\nanobot-core\src\cache\mod.rs:196:5
+    |
+194 | pub struct ResponseCache {
+    |            ------------- fields in this struct
+195 |     /// Cache for deterministic responses (same prompt = same response)
+196 |     deterministic: ConcurrentCache<String, String>,
+    |     ^^^^^^^^^^^^^
+...
+200 |     file_cache: ConcurrentCache<String, Vec<u8>>,
+    |     ^^^^^^^^^^
+
+warning: methods `cache_response`, `get_response`, `cache_file`, `get_file`, `stats`, and `cleanup` are never used
+   --> crates\nanobot-core\src\cache\mod.rs:213:18
+    |
+203 | impl ResponseCache {
+    | ------------------ methods in this implementation
+...
+213 |     pub async fn cache_response(&self, prompt_hash: String, response: String) {
+    |                  ^^^^^^^^^^^^^^
+...
+218 |     pub async fn get_response(&self, prompt_hash: &str) -> Option<String> {
+    |                  ^^^^^^^^^^^^
+...
+233 |     pub async fn cache_file(&self, path: String, content: Vec<u8>) {
+    |                  ^^^^^^^^^^
+...
+238 |     pub async fn get_file(&self, path: &str) -> Option<Vec<u8>> {
+    |                  ^^^^^^^^
+...
+243 |     pub async fn stats(&self) -> CacheStatsReport {
+    |                  ^^^^^
+...
+252 |     pub async fn cleanup(&self) {
+    |                  ^^^^^^^
+
+warning: struct `CacheStatsReport` is never constructed
+   --> crates\nanobot-core\src\cache\mod.rs:269:12
+    |
+269 | pub struct CacheStatsReport {
+    |            ^^^^^^^^^^^^^^^^
+
+warning: method `total_hit_rate` is never used
+   --> crates\nanobot-core\src\cache\mod.rs:276:12
+    |
+275 | impl CacheStatsReport {
+    | --------------------- method in this implementation
+276 |     pub fn total_hit_rate(&self) -> f64 {
+    |            ^^^^^^^^^^^^^^
+
+warning: function `init_cache_maintenance` is never used
+   --> crates\nanobot-core\src\cache\mod.rs:295:8
+    |
+295 | pub fn init_cache_maintenance() {
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `DataMigrator` is never constructed
+ --> crates\nanobot-core\src\context\migration.rs:6:12
+  |
+6 | pub struct DataMigrator {
+  |            ^^^^^^^^^^^^
+
+warning: associated items `new`, `migrate`, `migrate_session`, and `needs_migration` are never used
+  --> crates\nanobot-core\src\context\migration.rs:12:12
+   |
+11 | impl DataMigrator {
+   | ----------------- associated items in this implementation
+12 |     pub fn new(old_db: PathBuf, new_db: PathBuf) -> Self {
+   |            ^^^
+...
+17 |     pub fn migrate(&self) -> Result<()> {
+   |            ^^^^^^^
+...
+40 |     fn migrate_session(
+   |        ^^^^^^^^^^^^^^^
+...
+86 |     pub fn needs_migration(&self) -> Result<bool> {
+   |            ^^^^^^^^^^^^^^^
+
+warning: methods `add_message`, `fork_at`, `get_children`, and `get_session_tree` are never used
+   --> crates\nanobot-core\src\context\tree.rs:91:12
+    |
+ 24 | impl ContextTree {
+    | ---------------- methods in this implementation
+...
+ 91 |     pub fn add_message(
+    |            ^^^^^^^^^^^
+...
+338 |     pub fn fork_at(&self, node_id: &str, session_id: &str) -> Result<()> {
+    |            ^^^^^^^
+...
+369 |     pub fn get_children(&self, node_id: &str) -> Result<Vec<ContextNode>> {
+    |            ^^^^^^^^^^^^
+...
+399 |     pub fn get_session_tree(&self, session_id: &str) -> Result<Vec<ContextNode>> {
+    |            ^^^^^^^^^^^^^^^^
+
+warning: function `run_wiring_doctor` is never used
+  --> crates\nanobot-core\src\doctor\mod.rs:10:8
+   |
+10 | pub fn run_wiring_doctor() -> Result<()> {
+   |        ^^^^^^^^^^^^^^^^^
+
+warning: function `extract_described_tools` is never used
+   --> crates\nanobot-core\src\doctor\mod.rs:136:4
+    |
+136 | fn extract_described_tools(text: &str) -> HashSet<String> {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `command_exists_quick` is never used
+   --> crates\nanobot-core\src\doctor\mod.rs:173:4
+    |
+173 | fn command_exists_quick(cmd: &str) -> bool {
+    |    ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `run_doctor` is never used
+   --> crates\nanobot-core\src\doctor\mod.rs:200:14
+    |
+200 | pub async fn run_doctor() -> Result<()> {
+    |              ^^^^^^^^^^
+
+warning: function `check_openclaw_auth_writable` is never used
+   --> crates\nanobot-core\src\doctor\mod.rs:391:4
+    |
+391 | fn check_openclaw_auth_writable() -> Result<()> {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `command_major_version` is never used
+   --> crates\nanobot-core\src\doctor\mod.rs:402:4
+    |
+402 | fn command_major_version(cmd: &str) -> Option<u64> {
+    |    ^^^^^^^^^^^^^^^^^^^^^
+
+warning: trait `Colorize` is never used
+   --> crates\nanobot-core\src\doctor\mod.rs:417:7
+    |
+417 | trait Colorize {
+    |       ^^^^^^^^
+
+warning: function `check_telegram` is never used
+ --> crates\nanobot-core\src\doctor\telegram.rs:6:14
+  |
+6 | pub async fn check_telegram(config: &Result<Config, anyhow::Error>) -> bool {
+  |              ^^^^^^^^^^^^^^
+
+warning: function `check_allowed_users_config` is never used
+  --> crates\nanobot-core\src\doctor\telegram.rs:81:4
+   |
+81 | fn check_allowed_users_config() {
+   |    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: trait `Colorize` is never used
+  --> crates\nanobot-core\src\doctor\telegram.rs:91:7
+   |
+91 | trait Colorize {
+   |       ^^^^^^^^
+
+warning: function `parse_heartbeat_file` is never used
+  --> crates\nanobot-core\src\heartbeat.rs:36:8
+   |
+36 | pub fn parse_heartbeat_file(path: &Path) -> Result<HeartbeatSpec> {
+   |        ^^^^^^^^^^^^^^^^^^^^
+
+warning: fields `max_lifetime`, `http2`, `gzip`, and `brotli` are never read
+  --> crates\nanobot-core\src\http_client.rs:22:9
+   |
+16 | pub struct HttpClientConfig {
+   |            ---------------- fields in this struct
+...
+22 |     pub max_lifetime: Duration,
+   |         ^^^^^^^^^^^^
+...
+28 |     pub http2: bool,
+   |         ^^^^^
+29 |     /// Enable gzip compression
+30 |     pub gzip: bool,
+   |         ^^^^
+31 |     /// Enable brotli compression
+32 |     pub brotli: bool,
+   |         ^^^^^^
+   |
+   = note: `HttpClientConfig` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: methods `request` and `config` are never used
+  --> crates\nanobot-core\src\http_client.rs:89:18
+   |
+60 | impl PooledHttpClient {
+   | --------------------- methods in this implementation
+...
+89 |     pub async fn request<F, Fut>(&self, f: F) -> anyhow::Result<Response>
+   |                  ^^^^^^^
+...
+99 |     pub fn config(&self) -> &HttpClientConfig {
+   |            ^^^^^^
+
+warning: struct `RetryConfig` is never constructed
+   --> crates\nanobot-core\src\http_client.rs:116:12
+    |
+116 | pub struct RetryConfig {
+    |            ^^^^^^^^^^^
+
+warning: struct `ResilientHttpClient` is never constructed
+   --> crates\nanobot-core\src\http_client.rs:142:12
+    |
+142 | pub struct ResilientHttpClient {
+    |            ^^^^^^^^^^^^^^^^^^^
+
+warning: associated items `new`, `with_retry_config`, and `execute` are never used
+   --> crates\nanobot-core\src\http_client.rs:148:12
+    |
+147 | impl ResilientHttpClient {
+    | ------------------------ associated items in this implementation
+148 |     pub fn new(client: PooledHttpClient) -> Self {
+    |            ^^^
+...
+155 |     pub fn with_retry_config(mut self, config: RetryConfig) -> Self {
+    |            ^^^^^^^^^^^^^^^^^
+...
+161 |     pub async fn execute<F, Fut>(&self, f: F) -> anyhow::Result<Response>
+    |                  ^^^^^^^
+
+warning: function `init_global_http_client` is never used
+   --> crates\nanobot-core\src\http_client.rs:237:8
+    |
+237 | pub fn init_global_http_client(config: HttpClientConfig) -> anyhow::Result<()> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: methods `deny_tool` and `require_approval` are never used
+   --> crates\nanobot-core\src\intelligent_policy.rs:173:18
+    |
+ 57 | impl IntelligentPolicy {
+    | ---------------------- methods in this implementation
+...
+173 |     pub async fn deny_tool(&self, tool_name: &str) {
+    |                  ^^^^^^^^^
+...
+181 |     pub async fn require_approval(&self, tool_name: &str) {
+    |                  ^^^^^^^^^^^^^^^^
+
+warning: variant `Low` is never constructed
+  --> crates\nanobot-core\src\intelligent_router.rs:36:5
+   |
+32 | pub enum UrgencyLevel {
+   |          ------------ variant in this enum
+...
+36 |     Low,
+   |     ^^^
+   |
+   = note: `UrgencyLevel` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `id`, `channel`, and `timestamp` are never read
+  --> crates\nanobot-core\src\intelligent_router.rs:42:9
+   |
+41 | pub struct IncomingMessage {
+   |            --------------- fields in this struct
+42 |     pub id: String,
+   |         ^^
+...
+45 |     pub channel: String,
+   |         ^^^^^^^
+46 |     pub timestamp: Instant,
+   |         ^^^^^^^^^
+   |
+   = note: `IncomingMessage` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `intent` and `confidence` are never read
+  --> crates\nanobot-core\src\intelligent_router.rs:60:9
+   |
+59 | pub struct RoutePlan {
+   |            --------- fields in this struct
+60 |     pub intent: IntentKind,
+   |         ^^^^^^
+...
+63 |     pub confidence: f32,
+   |         ^^^^^^^^^^
+   |
+   = note: `RoutePlan` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `agent` and `estimated_wait` are never read
+   --> crates\nanobot-core\src\intelligent_router.rs:141:9
+    |
+140 |     Routed {
+    |     ------ fields in this variant
+141 |         agent: String,
+    |         ^^^^^
+142 |         estimated_wait: Duration,
+    |         ^^^^^^^^^^^^^^
+    |
+    = note: `RoutingResult` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `name` is never read
+  --> crates\nanobot-core\src\mcp\client.rs:16:5
+   |
+15 | pub struct McpClient {
+   |            --------- field in this struct
+16 |     name: String,
+   |     ^^^^
+
+warning: method `name` is never used
+   --> crates\nanobot-core\src\mcp\client.rs:302:12
+    |
+ 23 | impl McpClient {
+    | -------------- method in this implementation
+...
+302 |     pub fn name(&self) -> &str {
+    |            ^^^^
+
+warning: variants `Info`, `Low`, and `Medium` are never constructed
+  --> crates\nanobot-core\src\proactive_security.rs:36:5
+   |
+35 | pub enum Severity {
+   |          -------- variants in this enum
+36 |     Info,
+   |     ^^^^
+37 |     Low,
+   |     ^^^
+38 |     Medium,
+   |     ^^^^^^
+   |
+   = note: `Severity` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `event_log` is never read
+  --> crates\nanobot-core\src\proactive_security.rs:52:5
+   |
+44 | pub struct ProactiveSecurity {
+   |            ----------------- field in this struct
+...
+52 |     event_log: Arc<RwLock<Vec<SecurityEvent>>>,
+   |     ^^^^^^^^^
+
+warning: fields `timestamp`, `event_type`, `severity`, and `details` are never read
+  --> crates\nanobot-core\src\proactive_security.rs:65:9
+   |
+64 | pub struct SecurityEvent {
+   |            ------------- fields in this struct
+65 |     pub timestamp: Instant,
+   |         ^^^^^^^^^
+66 |     pub event_type: String,
+   |         ^^^^^^^^^^
+67 |     pub severity: Severity,
+   |         ^^^^^^^^
+68 |     pub details: String,
+   |         ^^^^^^^
+   |
+   = note: `SecurityEvent` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: methods `block_entity`, `log_event`, and `get_recent_events` are never used
+   --> crates\nanobot-core\src\proactive_security.rs:293:18
+    |
+ 71 | impl ProactiveSecurity {
+    | ---------------------- methods in this implementation
+...
+293 |     pub async fn block_entity(&self, entity: &str) {
+    |                  ^^^^^^^^^^^^
+...
+301 |     pub async fn log_event(&self, event_type: &str, severity: Severity, details: &str) {
+    |                  ^^^^^^^^^
+...
+313 |     pub async fn get_recent_events(&self, count: usize) -> Vec<SecurityEvent> {
+    |                  ^^^^^^^^^^^^^^^^^
+
+warning: function `describe_streamed_variant` is never used
+ --> crates\nanobot-core\src\variant_discovery.rs:3:8
+  |
+3 | pub fn describe_streamed_variant<T>(content: &StreamedAssistantContent<T>) -> &'static str {
+  |        ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `nanobot-core` (lib) generated 41 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.68s

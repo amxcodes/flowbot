@@ -1,0 +1,23 @@
+[providers.antigravity.low_cost]
+base_permits = 8
+max_permits = 16
+permits_list = [4, 8, 16]
+queue_wait_list = [1000, 3000]
+concurrency_list = [10, 50]
+provider_unhealthy_fail_threshold = 3
+
+[providers.openai.low_cost]
+base_permits = 8
+max_permits = 12
+permits_list = [4, 8, 12]
+queue_wait_list = [1000, 3000]
+concurrency_list = [10, 50]
+provider_unhealthy_fail_threshold = 5
+
+[providers.openrouter.low_cost]
+base_permits = 6
+max_permits = 10
+permits_list = [4, 6, 10]
+queue_wait_list = [1000, 3000]
+concurrency_list = [10, 50]
+provider_unhealthy_fail_threshold = 8

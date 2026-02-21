@@ -152,7 +152,10 @@ impl AgentManager {
         if let Some(parent_session_id) = parent_id {
             self.broadcast_to_session(&parent_session_id, text).await
         } else {
-            Err(anyhow::anyhow!("Parent session not found for {}", child_session_id))
+            Err(anyhow::anyhow!(
+                "Parent session not found for {}",
+                child_session_id
+            ))
         }
     }
 
@@ -163,7 +166,7 @@ impl AgentManager {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(300)).await; // Run every 5 minutes
                 if let Err(e) = manager.cleanup_sessions().await {
-                    eprintln!("Error in agent cleanup task: {}", e);
+                    tracing::warn!("Error in agent cleanup task: {}", e);
                 }
             }
         });
@@ -265,16 +268,15 @@ impl AgentManager {
         cleanup_policy: CleanupPolicy,
         model: Option<String>,
     ) -> Result<(AgentSession, SessionTask)> {
-        self
-            .spawn_subagent_with_options(
-                parent_session_id,
-                task,
-                _label,
-                cleanup_policy,
-                model,
-                SubagentOptions::default(),
-            )
-            .await
+        self.spawn_subagent_with_options(
+            parent_session_id,
+            task,
+            _label,
+            cleanup_policy,
+            model,
+            SubagentOptions::default(),
+        )
+        .await
     }
 
     pub async fn spawn_subagent_with_options(
@@ -362,7 +364,10 @@ impl AgentManager {
                             let _ = progress_manager
                                 .broadcast_to_parent(
                                     &progress_session_id,
-                                    format!("[Subagent {}] Progress: {}", progress_session_id, snippet),
+                                    format!(
+                                        "[Subagent {}] Progress: {}",
+                                        progress_session_id, snippet
+                                    ),
                                 )
                                 .await;
                         }
@@ -395,7 +400,11 @@ impl AgentManager {
                 };
                 if cancelled {
                     let _ = manager
-                        .update_task_status(&task.id, TaskStatus::Cancelled, Some("Cancelled by parent".to_string()))
+                        .update_task_status(
+                            &task.id,
+                            TaskStatus::Cancelled,
+                            Some("Cancelled by parent".to_string()),
+                        )
                         .await;
                     break;
                 }
@@ -411,7 +420,13 @@ impl AgentManager {
                     }
 
                     let _ = manager
-                        .update_task_status_attempt(&task.id, TaskStatus::Paused, attempt.saturating_sub(1), None, None)
+                        .update_task_status_attempt(
+                            &task.id,
+                            TaskStatus::Paused,
+                            attempt.saturating_sub(1),
+                            None,
+                            None,
+                        )
                         .await;
 
                     let cancelled_while_paused = {
@@ -420,7 +435,11 @@ impl AgentManager {
                     };
                     if cancelled_while_paused {
                         let _ = manager
-                            .update_task_status(&task.id, TaskStatus::Cancelled, Some("Cancelled by parent".to_string()))
+                            .update_task_status(
+                                &task.id,
+                                TaskStatus::Cancelled,
+                                Some("Cancelled by parent".to_string()),
+                            )
                             .await;
                         break;
                     }
@@ -436,8 +455,14 @@ impl AgentManager {
                     break;
                 }
 
-                let status = if attempt == 1 { TaskStatus::Running } else { TaskStatus::Retrying };
-                let _ = manager.update_task_status_attempt(&task.id, status, attempt, None, None).await;
+                let status = if attempt == 1 {
+                    TaskStatus::Running
+                } else {
+                    TaskStatus::Retrying
+                };
+                let _ = manager
+                    .update_task_status_attempt(&task.id, status, attempt, None, None)
+                    .await;
 
                 let exec_progress_tx = progress_tx.clone();
                 let result = tokio::time::timeout(
@@ -455,7 +480,13 @@ impl AgentManager {
                     Ok(Ok(output)) => {
                         let summary = crate::cron::isolated_agent::truncate_utf8(&output, 2000);
                         let _ = manager
-                            .update_task_status_attempt(&task.id, TaskStatus::Completed, attempt, Some(output), None)
+                            .update_task_status_attempt(
+                                &task.id,
+                                TaskStatus::Completed,
+                                attempt,
+                                Some(output),
+                                None,
+                            )
                             .await;
                         let _ = manager
                             .broadcast_to_parent(
@@ -556,7 +587,8 @@ impl AgentManager {
         status: TaskStatus,
         result: Option<String>,
     ) -> Result<()> {
-        self.update_task_status_attempt(task_id, status, 0, result, None).await
+        self.update_task_status_attempt(task_id, status, 0, result, None)
+            .await
     }
 
     pub async fn update_task_status_attempt(
@@ -579,7 +611,13 @@ impl AgentManager {
             if let Some(err) = last_error {
                 task.last_error = Some(err);
             }
-            if matches!(task.status, TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled | TaskStatus::TimedOut) {
+            if matches!(
+                task.status,
+                TaskStatus::Completed
+                    | TaskStatus::Failed
+                    | TaskStatus::Cancelled
+                    | TaskStatus::TimedOut
+            ) {
                 task.completed_at = Some(
                     std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
@@ -611,15 +649,14 @@ impl AgentManager {
         };
 
         if let Some(task_id) = task_id {
-            self
-                .update_task_status_attempt(
-                    &task_id,
-                    TaskStatus::Cancelled,
-                    0,
-                    Some("Cancelled by parent".to_string()),
-                    Some("Cancelled by parent".to_string()),
-                )
-                .await?;
+            self.update_task_status_attempt(
+                &task_id,
+                TaskStatus::Cancelled,
+                0,
+                Some("Cancelled by parent".to_string()),
+                Some("Cancelled by parent".to_string()),
+            )
+            .await?;
             Ok(())
         } else {
             Err(anyhow::anyhow!("No task found for session {}", session_id))
@@ -641,8 +678,7 @@ impl AgentManager {
         };
 
         if let Some(task_id) = task_id {
-            self
-                .update_task_status_attempt(&task_id, TaskStatus::Paused, 0, None, None)
+            self.update_task_status_attempt(&task_id, TaskStatus::Paused, 0, None, None)
                 .await?;
             Ok(())
         } else {
@@ -665,8 +701,7 @@ impl AgentManager {
         };
 
         if let Some(task_id) = task_id {
-            self
-                .update_task_status_attempt(&task_id, TaskStatus::Retrying, 0, None, None)
+            self.update_task_status_attempt(&task_id, TaskStatus::Retrying, 0, None, None)
                 .await?;
             Ok(())
         } else {
@@ -693,7 +728,10 @@ impl AgentManager {
         let start = Instant::now();
         loop {
             if start.elapsed() > timeout {
-                return Err(anyhow::anyhow!("Timeout waiting for session {}", session_id));
+                return Err(anyhow::anyhow!(
+                    "Timeout waiting for session {}",
+                    session_id
+                ));
             }
 
             if let Some(task) = self.get_task_by_session(session_id).await {
@@ -731,11 +769,11 @@ impl AgentManager {
         let mut recovered = 0;
 
         for task in tasks.values() {
-            if matches!(task.status, TaskStatus::Running | TaskStatus::Retrying) {
-                if let Some(session) = sessions.get(&task.session_id) {
-                    self.spawn_task_execution(session.clone(), task.clone());
-                    recovered += 1;
-                }
+            if matches!(task.status, TaskStatus::Running | TaskStatus::Retrying)
+                && let Some(session) = sessions.get(&task.session_id)
+            {
+                self.spawn_task_execution(session.clone(), task.clone());
+                recovered += 1;
             }
         }
 

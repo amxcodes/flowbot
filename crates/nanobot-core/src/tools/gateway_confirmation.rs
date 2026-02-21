@@ -2,7 +2,7 @@ use super::confirmation::{ConfirmationAdapter, ConfirmationRequest, Confirmation
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 
 /// WebSocket/Gateway confirmation adapter
 /// Sends confirmation requests as JSON events through WebSocket
@@ -49,7 +49,10 @@ impl GatewayConfirmationAdapter {
 
 #[async_trait]
 impl ConfirmationAdapter for GatewayConfirmationAdapter {
-    async fn request_confirmation(&self, request: &ConfirmationRequest) -> Result<ConfirmationResponse> {
+    async fn request_confirmation(
+        &self,
+        request: &ConfirmationRequest,
+    ) -> Result<ConfirmationResponse> {
         // Send request event to gateway
         let event = GatewayConfirmationEvent::Request {
             id: request.id.clone(),
@@ -62,21 +65,26 @@ impl ConfirmationAdapter for GatewayConfirmationAdapter {
         self.request_tx.send(event).await?;
 
         // Wait for response with timeout
-        let timeout = request.timeout.unwrap_or(std::time::Duration::from_secs(300));
-        
+        let timeout = request
+            .timeout
+            .unwrap_or(std::time::Duration::from_secs(300));
+
         match tokio::time::timeout(timeout, async {
             loop {
                 let mut rx = self.response_rx.lock().await;
-                if let Some(event) = rx.recv().await {
-                    if let GatewayConfirmationEvent::Response { id, allowed, remember } = event {
-                        if id == request.id {
-                            return Ok(ConfirmationResponse {
-                                id,
-                                allowed,
-                                remember,
-                            });
-                        }
-                    }
+                if let Some(event) = rx.recv().await
+                    && let GatewayConfirmationEvent::Response {
+                        id,
+                        allowed,
+                        remember,
+                    } = event
+                    && id == request.id
+                {
+                    return Ok(ConfirmationResponse {
+                        id,
+                        allowed,
+                        remember,
+                    });
                 }
             }
         })

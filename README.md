@@ -34,7 +34,7 @@ sudo systemctl enable nanobot
 
 **Done!** Your bot is live 24/7.
 
-📚 **Full guide**: [VPS_DEPLOYMENT.md](VPS_DEPLOYMENT.md)
+📚 **Full guide**: [VPS deployment guide](docs/guides/VPS_DEPLOYMENT.md)
 
 ---
 
@@ -115,7 +115,7 @@ Single message mode.
    TELEGRAM_ALLOWED_USERS=your_user_id
    ```
 
-📚 **Full guide**: [TELEGRAM_SETUP.md](TELEGRAM_SETUP.md)
+📚 **Full guide**: [Telegram setup guide](docs/guides/TELEGRAM_SETUP.md)
 
 ### Antigravity (Gemini) Setup
 
@@ -182,7 +182,7 @@ src/
 - Systemd service
 - Auto-restart
 - Log management
-- See [VPS_DEPLOYMENT.md](VPS_DEPLOYMENT.md)
+- See [VPS deployment guide](docs/guides/VPS_DEPLOYMENT.md)
 
 ### Docker (Coming Soon)
 ```bash
@@ -218,10 +218,20 @@ sudo systemctl status nanobot
 
 ## 📚 Documentation
 
-- [VPS Deployment Guide](VPS_DEPLOYMENT.md) - Production setup
-- [Telegram Setup](TELEGRAM_SETUP.md) - Bot configuration
-- [Telegram Testing](TELEGRAM_TESTING.md) - Usage & examples
-- [Provider Setup](PROVIDER_SETUP.md) - OAuth & API keys
+- [VPS Deployment Guide](docs/guides/VPS_DEPLOYMENT.md) - Production setup
+- [Telegram Setup](docs/guides/TELEGRAM_SETUP.md) - Bot configuration
+- [Telegram Testing](docs/guides/TELEGRAM_TESTING.md) - Usage & examples
+- [Provider Setup](docs/guides/PROVIDER_SETUP.md) - OAuth & API keys
+- [Project Handbook](docs/handbook/README.md) - Architecture, feature map, and ops playbook
+- [24x7 Bootstrap Setup](docs/handbook/06-bootstrap-24x7.md) - Non-interactive install and service runbook
+- [Parity Gates](docs/parity-gates.md) - OpenClaw parity scoring and thresholds
+- [Runtime Limits](docs/architecture/runtime-limits.md) - Single-instance boundaries and scaling constraints
+- [Hardening Phase Closure](docs/hardening/phase-closure.md) - Enforced runtime invariants and closure criteria
+- [Release Notes](docs/release-notes.md) - Runtime hardening release entry
+- [Sticky Scaling Checklist](docs/deployment/sticky-scaling-checklist.md) - Multi-replica sticky deployment requirements
+- [Consumer Production Runbook](docs/deployment/consumer-production-runbook.md) - Startup gates, health semantics, and rollback playbook
+- [Single-Replica Env Template](configs/single-replica.env) - Minimal deployment baseline
+- [Multi-Replica Sticky Redis Env Template](configs/multi-replica-sticky-redis.env) - Consumer multi-node baseline
 
 ---
 

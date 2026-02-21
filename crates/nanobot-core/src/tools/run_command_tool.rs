@@ -67,7 +67,8 @@ impl super::definitions::Tool for RunCommandTool {
             docker_image: None,
         };
 
-        cli_wrapper::run_and_format(run_args).await
+        let token = super::executor::new_executor_token();
+        cli_wrapper::run_and_format(&token, run_args).await
     }
 
     fn validate_args(

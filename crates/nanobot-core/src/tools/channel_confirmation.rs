@@ -53,7 +53,10 @@ impl ChannelConfirmationAdapter {
 
 #[async_trait]
 impl ConfirmationAdapter for ChannelConfirmationAdapter {
-    async fn request_confirmation(&self, request: &ConfirmationRequest) -> Result<ConfirmationResponse> {
+    async fn request_confirmation(
+        &self,
+        request: &ConfirmationRequest,
+    ) -> Result<ConfirmationResponse> {
         let (channel_name, user_id) = self.split_channel();
         let message = format!(
             "Security confirmation required.\n\nTool: {}\nRisk: {}\nOperation: {}\n\nArgs:\n{}\n\nApprove: /allow {}\nDeny: /deny {}",
@@ -73,18 +76,20 @@ impl ConfirmationAdapter for ChannelConfirmationAdapter {
 
         self.outbound_tx.send(outbound).await?;
 
-        let timeout = request.timeout.unwrap_or(std::time::Duration::from_secs(300));
+        let timeout = request
+            .timeout
+            .unwrap_or(std::time::Duration::from_secs(300));
         let response = tokio::time::timeout(timeout, async {
             loop {
                 let mut rx = self.response_rx.lock().await;
-                if let Some(event) = rx.recv().await {
-                    if event.request_id == request.id {
-                        return Ok(ConfirmationResponse {
-                            id: event.request_id,
-                            allowed: event.allowed,
-                            remember: false,
-                        });
-                    }
+                if let Some(event) = rx.recv().await
+                    && event.request_id == request.id
+                {
+                    return Ok(ConfirmationResponse {
+                        id: event.request_id,
+                        allowed: event.allowed,
+                        remember: false,
+                    });
                 }
             }
         })

@@ -1,6 +1,6 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use console::style;
-use dialoguer::{theme::ColorfulTheme, MultiSelect};
+use dialoguer::{MultiSelect, theme::ColorfulTheme};
 use futures::StreamExt;
 use std::path::{Path, PathBuf};
 use tokio::io::AsyncWriteExt;
@@ -13,16 +13,33 @@ struct WhisperModel {
 }
 
 const WHISPER_MODELS: &[WhisperModel] = &[
-    WhisperModel { id: "tiny", size: "~75 MB" },
-    WhisperModel { id: "base", size: "~145 MB" },
-    WhisperModel { id: "small", size: "~480 MB" },
-    WhisperModel { id: "medium", size: "~1.5 GB" },
-    WhisperModel { id: "large-v3", size: "~3.0 GB" },
-    WhisperModel { id: "turbo", size: "~1.6 GB" },
+    WhisperModel {
+        id: "tiny",
+        size: "~75 MB",
+    },
+    WhisperModel {
+        id: "base",
+        size: "~145 MB",
+    },
+    WhisperModel {
+        id: "small",
+        size: "~480 MB",
+    },
+    WhisperModel {
+        id: "medium",
+        size: "~1.5 GB",
+    },
+    WhisperModel {
+        id: "large-v3",
+        size: "~3.0 GB",
+    },
+    WhisperModel {
+        id: "turbo",
+        size: "~1.6 GB",
+    },
 ];
 
-const SHERPA_TTS_MODEL_URL: &str =
-    "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-lessac-high.tar.bz2";
+const SHERPA_TTS_MODEL_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-lessac-high.tar.bz2";
 
 pub async fn run_offline_models_installer() -> Result<()> {
     println!();
@@ -59,10 +76,10 @@ pub async fn run_offline_models_installer() -> Result<()> {
 
     let mut failures: Vec<String> = Vec::new();
 
-    if selected.contains(&0) {
-        if let Err(err) = install_whisper_models_interactive().await {
-            failures.push(format!("Whisper STT setup failed: {}", err));
-        }
+    if selected.contains(&0)
+        && let Err(err) = install_whisper_models_interactive().await
+    {
+        failures.push(format!("Whisper STT setup failed: {}", err));
     }
 
     if selected.contains(&1) {
@@ -72,20 +89,36 @@ pub async fn run_offline_models_installer() -> Result<()> {
             }
         } else {
             println!();
-            println!("{}", style("Skipping Sherpa TTS install on this architecture.").yellow());
+            println!(
+                "{}",
+                style("Skipping Sherpa TTS install on this architecture.").yellow()
+            );
         }
     }
 
     println!();
     if failures.is_empty() {
-        println!("{}", style("✅ Offline model installation step complete.").green().bold());
+        println!(
+            "{}",
+            style("✅ Offline model installation step complete.")
+                .green()
+                .bold()
+        );
     } else {
-        println!("{}", style("⚠️  Offline setup completed with warnings:").yellow().bold());
+        println!(
+            "{}",
+            style("⚠️  Offline setup completed with warnings:")
+                .yellow()
+                .bold()
+        );
         for issue in &failures {
             println!("  - {}", issue);
         }
     }
-    println!("You can re-run this anytime with: {}", style("nanobot setup --offline-models").green());
+    println!(
+        "You can re-run this anytime with: {}",
+        style("nanobot setup --offline-models").green()
+    );
     Ok(())
 }
 
@@ -118,7 +151,11 @@ async fn install_whisper_models_interactive() -> Result<()> {
     for idx in selected {
         let model = WHISPER_MODELS[idx];
         println!("Downloading Whisper model '{}'...", model.id);
-        run_python_code(&py, &format!("import whisper; whisper.load_model({:?})", model.id)).await?;
+        run_python_code(
+            &py,
+            &format!("import whisper; whisper.load_model({:?})", model.id),
+        )
+        .await?;
         println!("  {} {}", style("✓ Cached model:").green(), model.id);
     }
 
@@ -143,9 +180,14 @@ async fn ensure_whisper_python_package() -> Result<()> {
     let py = match detect_python().await? {
         Some(py) => py,
         None => {
-            println!("{}", style("Python not found in PATH. Attempting automatic install...").yellow());
+            println!(
+                "{}",
+                style("Python not found in PATH. Attempting automatic install...").yellow()
+            );
             if try_install_python().await {
-                detect_python().await?.ok_or_else(|| anyhow!(python_manual_help()))?
+                detect_python()
+                    .await?
+                    .ok_or_else(|| anyhow!(python_manual_help()))?
             } else {
                 return Err(anyhow!(python_manual_help()));
             }
@@ -178,7 +220,10 @@ async fn ensure_whisper_python_package() -> Result<()> {
             .arg("install")
             .arg("-U")
             .arg("openai-whisper");
-        let retry_status = retry.status().await.context("Failed to retry pip install")?;
+        let retry_status = retry
+            .status()
+            .await
+            .context("Failed to retry pip install")?;
         if !retry_status.success() {
             bail!("Failed to install openai-whisper via pip");
         }
@@ -236,10 +281,12 @@ async fn install_sherpa_tts_stack_interactive() -> Result<()> {
     println!("Extracting model archive...");
     extract_tar_bz2(&model_archive, &model_extract).await?;
 
-    let runtime_root = find_runtime_root(&runtime_extract)
-        .ok_or_else(|| anyhow!("Could not find sherpa runtime root (bin/lib) in extracted files"))?;
-    let model_root = find_model_root(&model_extract)
-        .ok_or_else(|| anyhow!("Could not find model root (.onnx + tokens.txt) in extracted files"))?;
+    let runtime_root = find_runtime_root(&runtime_extract).ok_or_else(|| {
+        anyhow!("Could not find sherpa runtime root (bin/lib) in extracted files")
+    })?;
+    let model_root = find_model_root(&model_extract).ok_or_else(|| {
+        anyhow!("Could not find model root (.onnx + tokens.txt) in extracted files")
+    })?;
 
     if runtime_dir.exists() {
         tokio::fs::remove_dir_all(&runtime_dir).await?;
@@ -253,8 +300,16 @@ async fn install_sherpa_tts_stack_interactive() -> Result<()> {
 
     let _ = tokio::fs::remove_dir_all(&temp_root).await;
 
-    println!("{} {}", style("✓ Runtime installed:").green(), runtime_dir.display());
-    println!("{} {}", style("✓ Model installed:").green(), model_dir.display());
+    println!(
+        "{} {}",
+        style("✓ Runtime installed:").green(),
+        runtime_dir.display()
+    );
+    println!(
+        "{} {}",
+        style("✓ Model installed:").green(),
+        model_dir.display()
+    );
     println!("TTS tool auto-detects these paths if env vars are not set.");
     Ok(())
 }
@@ -279,13 +334,17 @@ async fn try_install_python() -> bool {
                 .await;
             return status.map(|s| s.success()).unwrap_or(false);
         }
-        return false;
+        false
     }
 
     #[cfg(target_os = "macos")]
     {
         if command_available("brew").await {
-            let status = Command::new("brew").arg("install").arg("python").status().await;
+            let status = Command::new("brew")
+                .arg("install")
+                .arg("python")
+                .status()
+                .await;
             return status.map(|s| s.success()).unwrap_or(false);
         }
         return false;
@@ -348,12 +407,13 @@ async fn ensure_ffmpeg_available() {
         return;
     }
 
-    println!("{}", style("ffmpeg not found in PATH. Attempting automatic install...").yellow());
-    if try_install_ffmpeg().await {
-        if command_available("ffmpeg").await {
-            println!("{}", style("✓ Installed ffmpeg").green());
-            return;
-        }
+    println!(
+        "{}",
+        style("ffmpeg not found in PATH. Attempting automatic install...").yellow()
+    );
+    if try_install_ffmpeg().await && command_available("ffmpeg").await {
+        println!("{}", style("✓ Installed ffmpeg").green());
+        return;
     }
 
     println!("{}", style("⚠️  Could not auto-install ffmpeg.").yellow());
@@ -375,13 +435,17 @@ async fn try_install_ffmpeg() -> bool {
                 .await;
             return status.map(|s| s.success()).unwrap_or(false);
         }
-        return false;
+        false
     }
 
     #[cfg(target_os = "macos")]
     {
         if command_available("brew").await {
-            let status = Command::new("brew").arg("install").arg("ffmpeg").status().await;
+            let status = Command::new("brew")
+                .arg("install")
+                .arg("ffmpeg")
+                .status()
+                .await;
             return status.map(|s| s.success()).unwrap_or(false);
         }
         return false;
@@ -509,7 +573,11 @@ fn find_runtime_root(base: &Path) -> Option<PathBuf> {
         "sherpa-onnx-offline-tts"
     };
 
-    for entry in walkdir::WalkDir::new(base).max_depth(6).into_iter().flatten() {
+    for entry in walkdir::WalkDir::new(base)
+        .max_depth(6)
+        .into_iter()
+        .flatten()
+    {
         if entry.file_type().is_file() && entry.file_name().to_string_lossy() == binary_name {
             let bin_dir = entry.path().parent()?;
             return bin_dir.parent().map(|p| p.to_path_buf());
@@ -520,7 +588,11 @@ fn find_runtime_root(base: &Path) -> Option<PathBuf> {
 }
 
 fn find_model_root(base: &Path) -> Option<PathBuf> {
-    for entry in walkdir::WalkDir::new(base).max_depth(6).into_iter().flatten() {
+    for entry in walkdir::WalkDir::new(base)
+        .max_depth(6)
+        .into_iter()
+        .flatten()
+    {
         if !entry.file_type().is_file() {
             continue;
         }

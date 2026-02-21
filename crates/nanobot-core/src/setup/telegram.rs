@@ -7,10 +7,38 @@ use serde_json::Value;
 
 use super::channel_instructions::print_instruction_box;
 
+fn parse_allowed_user_ids(raw: &str) -> Result<Option<Vec<i64>>> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    let mut ids = Vec::new();
+    for piece in trimmed.split(',') {
+        let token = piece.trim();
+        if token.is_empty() {
+            continue;
+        }
+        let parsed = token.parse::<i64>().map_err(|_| {
+            anyhow::anyhow!(
+                "Invalid user ID '{}' (use numeric Telegram IDs, comma-separated)",
+                token
+            )
+        })?;
+        ids.push(parsed);
+    }
+
+    if ids.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(ids))
+    }
+}
+
 pub async fn run_telegram_setup_wizard() -> Result<()> {
     println!();
     println!("{}", style("Telegram Bot Setup").bold().cyan());
-    
+
     print_instruction_box(
         "Telegram Bot Token",
         &[
@@ -34,7 +62,7 @@ pub async fn run_telegram_setup_wizard() -> Result<()> {
             // Create default config structure
             // In a real scenario we might want a default constructor
             return Err(anyhow::anyhow!(
-                "Config file not found. Run 'flowbot setup' first to create the workspace and config."
+                "Config file not found. Run 'nanobot setup' first to create the workspace and config."
             ));
         }
     };
@@ -85,14 +113,35 @@ pub async fn run_telegram_setup_wizard() -> Result<()> {
 
         // Setup Pairing
         println!("{}", style("🔐 Security Configuration").bold());
-        println!("Flowbot uses a secure Pairing System by default.");
+        println!("Nanobot uses a secure Pairing System by default.");
         println!("Unauthorized users will be blocked and given a pairing code.");
-        println!("You can approve them with `flowbot pairing approve telegram <CODE>`.");
+        println!("You can approve them with `nanobot pairing approve telegram <CODE>`.");
         println!();
 
-        // Ask for optional personal User ID for auto-approval?
-        // Actually, let's keep it simple: just setup the token.
-        // The pairing system handles the rest.
+        let allowed_users = if Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Add trusted Telegram user IDs now? (optional)")
+            .default(true)
+            .interact()?
+        {
+            println!("Tip: get your numeric ID from @userinfobot");
+            let raw_ids: String = Input::with_theme(&ColorfulTheme::default())
+                .with_prompt("Enter allowed user ID(s), comma-separated")
+                .allow_empty(true)
+                .interact_text()?;
+
+            match parse_allowed_user_ids(&raw_ids) {
+                Ok(v) => v,
+                Err(e) => {
+                    println!("{} {}", style("⚠️  Skipping allowlist:").yellow(), e);
+                    println!(
+                        "You can set it later in config.toml under providers.telegram.allowed_users"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         if Confirm::with_theme(&ColorfulTheme::default())
             .with_prompt("Save this configuration?")
@@ -103,11 +152,11 @@ pub async fn run_telegram_setup_wizard() -> Result<()> {
             if config.providers.telegram.is_none() {
                 config.providers.telegram = Some(TelegramConfig {
                     bot_token: token.clone(),
+                    allowed_users,
                 });
-            } else {
-                if let Some(ref mut tg) = config.providers.telegram {
-                    tg.bot_token = token.clone();
-                }
+            } else if let Some(ref mut tg) = config.providers.telegram {
+                tg.bot_token = token.clone();
+                tg.allowed_users = allowed_users;
             }
 
             config.save()?;
@@ -115,7 +164,7 @@ pub async fn run_telegram_setup_wizard() -> Result<()> {
 
             println!();
             println!("🚀 To start the bot:");
-            println!("   {}", style("flowbot gateway").cyan());
+            println!("   {}", style("nanobot gateway").cyan());
         }
     } else {
         println!("{}", style("❌ Failed to parse Telegram response").red());

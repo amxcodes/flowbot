@@ -1,8 +1,8 @@
+use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use anyhow::Result;
 
 /// Supervisor manages child agent lifecycle with configurable supervision policies
 pub struct Supervisor {
@@ -23,7 +23,8 @@ pub enum SupervisionPolicy {
 }
 
 /// Factory function that creates a new agent task
-pub type AgentFactory = Arc<dyn Fn(mpsc::Receiver<super::AgentMessage>) -> JoinHandle<()> + Send + Sync>;
+pub type AgentFactory =
+    Arc<dyn Fn(mpsc::Receiver<super::AgentMessage>) -> JoinHandle<()> + Send + Sync>;
 
 struct ChildHandle {
     task: JoinHandle<()>,
@@ -60,14 +61,18 @@ impl Supervisor {
     }
 
     /// Spawn a new child agent with a factory function for restarts
-    pub async fn spawn_child_with_factory<F>(&mut self, config: ChildConfig, factory: F) -> Result<AgentId>
+    pub async fn spawn_child_with_factory<F>(
+        &mut self,
+        config: ChildConfig,
+        factory: F,
+    ) -> Result<AgentId>
     where
         F: Fn(mpsc::Receiver<super::AgentMessage>) -> JoinHandle<()> + Send + Sync + 'static,
     {
         let agent_id = self.generate_agent_id();
         let (tx, rx) = mpsc::channel(100);
         let factory_arc: AgentFactory = Arc::new(factory);
-        
+
         let task = (factory_arc.as_ref())(rx);
 
         let handle = ChildHandle {
@@ -88,7 +93,9 @@ impl Supervisor {
     pub async fn spawn_child(
         &mut self,
         config: ChildConfig,
-        agent_fn: impl FnOnce(mpsc::Receiver<super::AgentMessage>) -> tokio::task::JoinHandle<()> + Send + 'static,
+        agent_fn: impl FnOnce(mpsc::Receiver<super::AgentMessage>) -> tokio::task::JoinHandle<()>
+        + Send
+        + 'static,
     ) -> Result<AgentId> {
         let agent_id = self.generate_agent_id();
         let (tx, rx) = mpsc::channel(100);
@@ -136,26 +143,39 @@ impl Supervisor {
 
         for (agent_id, handle) in &self.children {
             if handle.task.is_finished() {
-                finished.push((agent_id.clone(), handle.config.clone(), handle.restart_count, handle.factory.clone()));
+                finished.push((
+                    agent_id.clone(),
+                    handle.config.clone(),
+                    handle.restart_count,
+                    handle.factory.clone(),
+                ));
             }
         }
 
         if !finished.is_empty() {
             match self.policy {
-               SupervisionPolicy::OneForOne => {
+                SupervisionPolicy::OneForOne => {
                     for (agent_id, config, restart_count, factory) in finished {
-                        tracing::warn!("Child agent {} finished (restart count: {})", agent_id, restart_count);
+                        tracing::warn!(
+                            "Child agent {} finished (restart count: {})",
+                            agent_id,
+                            restart_count
+                        );
                         self.children.remove(&agent_id);
-                        
+
                         // Auto-restart if under limit AND factory is available
                         if restart_count < config.max_restarts {
                             if let Some(factory_fn) = factory {
-                                tracing::info!("Restarting child agent: {} (attempt {})", agent_id, restart_count + 1);
-                                
+                                tracing::info!(
+                                    "Restarting child agent: {} (attempt {})",
+                                    agent_id,
+                                    restart_count + 1
+                                );
+
                                 // Create new channel for restarted child
                                 let (tx, rx) = mpsc::channel(100);
                                 let task = (factory_fn.as_ref())(rx);
-                                
+
                                 let handle = ChildHandle {
                                     task,
                                     sender: tx,
@@ -163,23 +183,31 @@ impl Supervisor {
                                     restart_count: restart_count + 1,
                                     factory: Some(factory_fn),
                                 };
-                                
+
                                 self.children.insert(agent_id.clone(), handle);
                                 tracing::info!("Successfully restarted child agent: {}", agent_id);
                             } else {
-                                tracing::warn!("Cannot restart {}: no factory stored (use spawn_child_with_factory)", agent_id);
+                                tracing::warn!(
+                                    "Cannot restart {}: no factory stored (use spawn_child_with_factory)",
+                                    agent_id
+                                );
                             }
                         } else {
-                            tracing::warn!("Child agent {} exceeded max restarts ({}), not restarting", agent_id, config.max_restarts);
+                            tracing::warn!(
+                                "Child agent {} exceeded max restarts ({}), not restarting",
+                                agent_id,
+                                config.max_restarts
+                            );
                         }
                     }
                 }
                 SupervisionPolicy::AllForOne => {
                     if !finished.is_empty() {
-                        tracing::warn!("Child failure detected, killing all children (AllForOne policy)");
+                        tracing::warn!(
+                            "Child failure detected, killing all children (AllForOne policy)"
+                        );
                         self.kill_all().await;
-                        // Note: AllForOne restart would require storing all factories
-                        // TODO: Implement if needed
+                        // All-for-one restart intentionally disabled unless all child factories are registered.
                     }
                 }
             }
@@ -214,22 +242,22 @@ impl Supervisor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::time::{sleep, Duration};
+    use tokio::time::{Duration, sleep};
 
     #[tokio::test]
     async fn test_spawn_child() {
         let mut supervisor = Supervisor::new(SupervisionPolicy::OneForOne);
-        
-        let agent_id = supervisor.spawn_child(
-            ChildConfig::default(),
-            |mut rx| {
+
+        let agent_id = supervisor
+            .spawn_child(ChildConfig::default(), |mut rx| {
                 tokio::spawn(async move {
                     while let Some(_msg) = rx.recv().await {
                         // Process messages
                     }
                 })
-            }
-        ).await.unwrap();
+            })
+            .await
+            .unwrap();
 
         assert_eq!(supervisor.child_count(), 1);
         assert!(supervisor.list_children().contains(&agent_id));
@@ -238,15 +266,13 @@ mod tests {
     #[tokio::test]
     async fn test_kill_child() {
         let mut supervisor = Supervisor::new(SupervisionPolicy::OneForOne);
-        
-        let agent_id = supervisor.spawn_child(
-            ChildConfig::default(),
-            |mut rx| {
-                tokio::spawn(async move {
-                    while let Some(_msg) = rx.recv().await {}
-                })
-            }
-        ).await.unwrap();
+
+        let agent_id = supervisor
+            .spawn_child(ChildConfig::default(), |mut rx| {
+                tokio::spawn(async move { while let Some(_msg) = rx.recv().await {} })
+            })
+            .await
+            .unwrap();
 
         supervisor.kill_child(&agent_id).await.unwrap();
         assert_eq!(supervisor.child_count(), 0);
@@ -255,16 +281,14 @@ mod tests {
     #[tokio::test]
     async fn test_kill_all() {
         let mut supervisor = Supervisor::new(SupervisionPolicy::OneForOne);
-        
+
         for _ in 0..3 {
-            supervisor.spawn_child(
-                ChildConfig::default(),
-                |mut rx| {
-                    tokio::spawn(async move {
-                        while let Some(_msg) = rx.recv().await {}
-                    })
-                }
-            ).await.unwrap();
+            supervisor
+                .spawn_child(ChildConfig::default(), |mut rx| {
+                    tokio::spawn(async move { while let Some(_msg) = rx.recv().await {} })
+                })
+                .await
+                .unwrap();
         }
 
         assert_eq!(supervisor.child_count(), 3);
@@ -275,26 +299,24 @@ mod tests {
     #[tokio::test]
     async fn test_supervision_one_for_one() {
         let mut supervisor = Supervisor::new(SupervisionPolicy::OneForOne);
-        
+
         // Spawn child that exits immediately
-        supervisor.spawn_child(
-            ChildConfig::default(),
-            |_rx| {
+        supervisor
+            .spawn_child(ChildConfig::default(), |_rx| {
                 tokio::spawn(async move {
                     // Exit immediately
                 })
-            }
-        ).await.unwrap();
+            })
+            .await
+            .unwrap();
 
         // Spawn child that stays alive
-        supervisor.spawn_child(
-            ChildConfig::default(),
-            |mut rx| {
-                tokio::spawn(async move {
-                    while let Some(_msg) = rx.recv().await {}
-                })
-            }
-        ).await.unwrap();
+        supervisor
+            .spawn_child(ChildConfig::default(), |mut rx| {
+                tokio::spawn(async move { while let Some(_msg) = rx.recv().await {} })
+            })
+            .await
+            .unwrap();
 
         sleep(Duration::from_millis(100)).await;
         supervisor.supervise().await;

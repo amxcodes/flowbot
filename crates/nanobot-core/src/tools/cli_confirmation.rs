@@ -1,8 +1,10 @@
-use super::confirmation::{ConfirmationAdapter, ConfirmationRequest, ConfirmationResponse, RiskLevel};
+use super::confirmation::{
+    ConfirmationAdapter, ConfirmationRequest, ConfirmationResponse, RiskLevel,
+};
 use anyhow::Result;
 use async_trait::async_trait;
 use colored::Colorize;
-use std::io::{self, Write, IsTerminal};
+use std::io::{self, IsTerminal, Write};
 
 /// CLI confirmation adapter using terminal prompts
 pub struct CliConfirmationAdapter;
@@ -33,21 +35,42 @@ impl CliConfirmationAdapter {
 
 #[async_trait]
 impl ConfirmationAdapter for CliConfirmationAdapter {
-    async fn request_confirmation(&self, request: &ConfirmationRequest) -> Result<ConfirmationResponse> {
+    async fn request_confirmation(
+        &self,
+        request: &ConfirmationRequest,
+    ) -> Result<ConfirmationResponse> {
         // Print header
         println!();
-        println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_cyan());
+        println!(
+            "{}",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_cyan()
+        );
         println!(
             "{} {} Permission Request",
             Self::format_risk_emoji(request.risk_level),
             "SECURITY:".bright_cyan().bold()
         );
-        println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_cyan());
+        println!(
+            "{}",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_cyan()
+        );
 
         // Print details
-        println!("{}: {}", "Tool".bright_white().bold(), request.tool_name.cyan());
-        println!("{}: {}", "Operation".bright_white().bold(), request.operation);
-        println!("{}: {}", "Arguments".bright_white().bold(), request.args.yellow());
+        println!(
+            "{}: {}",
+            "Tool".bright_white().bold(),
+            request.tool_name.cyan()
+        );
+        println!(
+            "{}: {}",
+            "Operation".bright_white().bold(),
+            request.operation
+        );
+        println!(
+            "{}: {}",
+            "Arguments".bright_white().bold(),
+            request.args.yellow()
+        );
         println!(
             "{}: {}",
             "Risk Level".bright_white().bold(),
@@ -60,18 +83,22 @@ impl ConfirmationAdapter for CliConfirmationAdapter {
             println!(
                 "{} {}",
                 "⚠️".red(),
-                "This operation could potentially damage your system!".red().bold()
+                "This operation could potentially damage your system!"
+                    .red()
+                    .bold()
             );
         }
 
-        println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_cyan());
+        println!(
+            "{}",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".bright_cyan()
+        );
 
         // Prompt for decision
         print!(
-            "{} {} {}",
+            "{} {} ",
             "Allow this operation?".bright_white().bold(),
-            "[y/n/always]:".bright_white(),
-            ""
+            "[y/n/always]:".bright_white()
         );
         io::stdout().flush()?;
 
@@ -131,7 +158,13 @@ mod tests {
 
     #[test]
     fn test_risk_formatting() {
-        assert_eq!(CliConfirmationAdapter::format_risk_emoji(RiskLevel::Low), "ℹ️");
-        assert_eq!(CliConfirmationAdapter::format_risk_emoji(RiskLevel::Critical), "💀");
+        assert_eq!(
+            CliConfirmationAdapter::format_risk_emoji(RiskLevel::Low),
+            "ℹ️"
+        );
+        assert_eq!(
+            CliConfirmationAdapter::format_risk_emoji(RiskLevel::Critical),
+            "💀"
+        );
     }
 }

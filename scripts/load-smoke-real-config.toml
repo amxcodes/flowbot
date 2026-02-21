@@ -1,0 +1,4 @@
+default_provider = "antigravity"
+context_token_limit = 32000
+
+[providers.antigravity]

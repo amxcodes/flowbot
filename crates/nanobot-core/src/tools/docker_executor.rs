@@ -37,9 +37,9 @@ pub async fn execute_in_container(
     config: &SandboxConfig,
 ) -> Result<String> {
     let current_dir = std::env::current_dir()?;
-    let mount_path = current_dir.to_str().ok_or_else(|| {
-        anyhow::anyhow!("Invalid current directory path")
-    })?;
+    let mount_path = current_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Invalid current directory path"))?;
 
     // Use a fixed container name or random? Random is better for concurrency.
     // Docker run --rm handles cleanup.
@@ -47,23 +47,29 @@ pub async fn execute_in_container(
     let mut docker_cmd = Command::new("docker");
     docker_cmd.arg("run");
     docker_cmd.arg("--rm"); // Remove container after execution
-    
+
     // Security flags
     if !config.allow_network {
         docker_cmd.arg("--network=none");
     }
-    
+
     // Filesystem flags
     // We always want root to be read-only if possible, but allow /tmp and /workspace
     docker_cmd.arg("--read-only");
-    
+
     // Mount tmpfs for temp files
     docker_cmd.arg("--tmpfs").arg("/tmp");
-    
+
     // Mount workspace
-    let mount_mode = if config.writable_workspace { "rw" } else { "ro" };
-    docker_cmd.arg("-v").arg(format!("{}:/workspace:{}", mount_path, mount_mode));
-    
+    let mount_mode = if config.writable_workspace {
+        "rw"
+    } else {
+        "ro"
+    };
+    docker_cmd
+        .arg("-v")
+        .arg(format!("{}:/workspace:{}", mount_path, mount_mode));
+
     // Set working directory
     if let Some(wd) = &config.workdir {
         docker_cmd.arg("-w").arg(wd);
@@ -73,10 +79,10 @@ pub async fn execute_in_container(
     for (key, val) in &config.env_vars {
         docker_cmd.arg("-e").arg(format!("{}={}", key, val));
     }
-    
+
     // Image
     docker_cmd.arg(&config.image);
-    
+
     // Command and Args (DIRECT PASSING - Prevents Shell Injection)
     docker_cmd.arg(command);
     docker_cmd.args(args);
@@ -92,7 +98,8 @@ pub async fn execute_in_container(
         let stdout = String::from_utf8_lossy(&output.stdout);
         Err(anyhow::anyhow!(
             "Docker execution failed.\nStderr: {}\nStdout: {}",
-            stderr, stdout
+            stderr,
+            stdout
         ))
     }
 }

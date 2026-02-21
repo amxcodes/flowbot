@@ -12,6 +12,12 @@ pub struct McpManager {
     tools_cache: Arc<RwLock<Vec<(String, McpTool)>>>, // (server_name, tool)
 }
 
+impl Default for McpManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl McpManager {
     pub fn new() -> Self {
         Self {
@@ -26,35 +32,30 @@ impl McpManager {
 
         // If identical config already exists and client is alive, treat as idempotent success.
         // Ensure tool cache is present/fresh for that server before returning.
-        if let Some(existing) = self.configs.read().await.get(&name).cloned() {
-            if existing.command == config.command
-                && existing.args == config.args
-                && existing.env == config.env
-            {
-                if let Some(client) = self.clients.read().await.get(&name).cloned() {
-                    if client.is_alive().await {
-                        let needs_refresh = {
-                            let cache = self.tools_cache.read().await;
-                            !cache.iter().any(|(server, _)| server == &name)
-                        };
+        if let Some(existing) = self.configs.read().await.get(&name).cloned()
+            && existing.command == config.command
+            && existing.args == config.args
+            && existing.env == config.env
+            && let Some(client) = self.clients.read().await.get(&name).cloned()
+            && client.is_alive().await
+        {
+            let needs_refresh = {
+                let cache = self.tools_cache.read().await;
+                !cache.iter().any(|(server, _)| server == &name)
+            };
 
-                        if needs_refresh {
-                            if let Ok(tools) = client.list_tools().await {
-                                let mut cache = self.tools_cache.write().await;
-                                cache.retain(|(s, _)| s != &name);
-                                for tool in tools {
-                                    cache.push((name.clone(), tool));
-                                }
-                            }
-                        }
-
-                        tracing::debug!("MCP server '{}' already configured and alive", name);
-                        return Ok(());
-                    }
+            if needs_refresh && let Ok(tools) = client.list_tools().await {
+                let mut cache = self.tools_cache.write().await;
+                cache.retain(|(s, _)| s != &name);
+                for tool in tools {
+                    cache.push((name.clone(), tool));
                 }
             }
+
+            tracing::debug!("MCP server '{}' already configured and alive", name);
+            return Ok(());
         }
-        
+
         // Store config
         {
             let mut configs = self.configs.write().await;
@@ -62,7 +63,7 @@ impl McpManager {
         }
 
         tracing::info!("🔌 Connecting to MCP server: {}", name);
-        
+
         let client = match McpClient::new(config).await {
             Ok(c) => Arc::new(c),
             Err(e) => {
@@ -70,12 +71,12 @@ impl McpManager {
                 return Err(e);
             }
         };
-        
+
         // Fetch tools from this server
         match client.list_tools().await {
             Ok(tools) => {
                 tracing::info!("📦 MCP server '{}' provides {} tools", name, tools.len());
-                
+
                 // Update cache
                 let mut cache = self.tools_cache.write().await;
                 // Remove old tools from this server
@@ -84,18 +85,18 @@ impl McpManager {
                 for tool in tools {
                     cache.push((name.clone(), tool));
                 }
-            },
+            }
             Err(e) => {
                 tracing::error!("Failed to list tools from MCP server {}: {}", name, e);
             }
         }
-        
+
         // Store client
         let mut clients = self.clients.write().await;
         // Replace old client if exists (dropping old Arc triggers process cleanup via Drop)
         clients.remove(&name);
         clients.insert(name, client);
-        
+
         Ok(())
     }
 
@@ -130,9 +131,9 @@ impl McpManager {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-                
+
                 let configs_map = configs.read().await.clone();
-                
+
                 for (name, config) in configs_map {
                     let should_restart = {
                         let clients_guard = clients.read().await;
@@ -145,27 +146,31 @@ impl McpManager {
 
                     if should_restart {
                         tracing::warn!("🔄 Restarting MCP server: {}", name);
-                        
+
                         // We need to reimplement add_server logic here to avoid cloning self
                         // or make add_server not take &self but be a static method / logic?
                         // Or just duplicate logic for now since it's simple.
-                        
+
                         match McpClient::new(config.clone()).await {
                             Ok(c) => {
                                 let client = Arc::new(c);
                                 // Fetch tools
                                 if let Ok(tools) = client.list_tools().await {
-                                    tracing::info!("📦 MCP server '{}' re-connected, {} tools", name, tools.len());
+                                    tracing::info!(
+                                        "📦 MCP server '{}' re-connected, {} tools",
+                                        name,
+                                        tools.len()
+                                    );
                                     let mut cache = manager_tools_cache.write().await;
                                     cache.retain(|(s, _)| s != &name);
                                     for tool in tools {
                                         cache.push((name.clone(), tool));
                                     }
                                 }
-                                
+
                                 let mut clients_guard = clients.write().await;
                                 clients_guard.insert(name, client);
-                            },
+                            }
                             Err(e) => {
                                 tracing::error!("Failed to restart MCP server {}: {}", name, e);
                             }
@@ -188,11 +193,11 @@ impl McpManager {
         arguments: serde_json::Value,
     ) -> Result<ToolCallResult> {
         let clients = self.clients.read().await;
-        
+
         let client = clients
             .get(server_name)
             .ok_or_else(|| anyhow::anyhow!("MCP server '{}' not found", server_name))?;
-        
+
         client.call_tool(tool_name, arguments).await
     }
 
@@ -204,7 +209,7 @@ impl McpManager {
         // Find tool in cache
         let cache = self.tools_cache.read().await;
         let found = cache.iter().find(|(_, tool)| tool.name == tool_name);
-        
+
         if let Some((server_name, _)) = found {
             let server_name = server_name.clone();
             drop(cache); // Release lock before awaiting

@@ -1,7 +1,7 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
+use rig::OneOrMany;
 use rig::completion::message::{Text, UserContent};
 use rig::completion::{CompletionRequest, Message};
-use rig::OneOrMany;
 use serde_json::Value;
 use tokio_stream::StreamExt;
 
@@ -36,10 +36,10 @@ pub async fn execute_llm_task(args: &Value) -> Result<String> {
     let mut stream = provider.stream(request).await?;
     let mut output = String::new();
     while let Some(chunk_res) = stream.next().await {
-        if let Ok(chunk) = chunk_res {
-            if let rig::streaming::StreamedAssistantContent::Text(t) = chunk {
-                output.push_str(&t.text);
-            }
+        if let Ok(chunk) = chunk_res
+            && let crate::agent::ProviderChunk::TextDelta(t) = chunk
+        {
+            output.push_str(&t);
         }
     }
 

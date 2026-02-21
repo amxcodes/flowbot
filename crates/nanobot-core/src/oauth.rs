@@ -21,6 +21,30 @@ impl OAuthFlow {
     /// This now implements PKCE (S256) for Antigravity
     pub fn get_auth_url(&mut self) -> Result<String> {
         match self.provider.as_str() {
+            "google" | "google-calendar" => {
+                let (client_id, _client_secret) = google_oauth_credentials()?;
+                let redirect_uri = "http://localhost:8080/callback";
+                let scope = "openid email profile https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/contacts.readonly";
+
+                let mut rng = rand::rng();
+                let random_bytes: [u8; 32] = rng.random();
+                let verifier = hex_encode(&random_bytes);
+                self.code_verifier = Some(verifier.clone());
+
+                let mut hasher = Sha256::new();
+                hasher.update(verifier.as_bytes());
+                let challenge = URL_SAFE_NO_PAD.encode(hasher.finalize());
+
+                let state = verifier;
+                Ok(format!(
+                    "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent&code_challenge={}&code_challenge_method=S256&state={}",
+                    client_id,
+                    urlencoding::encode(redirect_uri),
+                    urlencoding::encode(scope),
+                    challenge,
+                    state
+                ))
+            }
             "antigravity" => {
                 // PKCE Implementation
                 // 1. Generate 32 random bytes and hex-encode them for the verifier
@@ -41,7 +65,7 @@ impl OAuthFlow {
                 let client_id =
                     "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
                 let redirect_uri = "http://localhost:51121/oauth-callback";
-                let scope = "openid email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs";
+                let scope = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs";
                 let response_type = "code";
                 let access_type = "offline";
                 let prompt = "consent";
@@ -104,6 +128,52 @@ impl OAuthFlow {
     /// Exchange authorization code for access token
     pub async fn exchange_code(&self, code: &str) -> Result<ProviderToken> {
         match self.provider.as_str() {
+            "google" | "google-calendar" => {
+                let (client_id, client_secret) = google_oauth_credentials()?;
+                let redirect_uri = "http://localhost:8080/callback";
+
+                let client = reqwest::Client::new();
+                let mut params = vec![
+                    ("code", code.to_string()),
+                    ("client_id", client_id.to_string()),
+                    ("client_secret", client_secret.to_string()),
+                    ("redirect_uri", redirect_uri.to_string()),
+                    ("grant_type", "authorization_code".to_string()),
+                ];
+
+                if let Some(verifier) = &self.code_verifier {
+                    params.push(("code_verifier", verifier.to_string()));
+                }
+
+                let response = client
+                    .post("https://oauth2.googleapis.com/token")
+                    .form(&params)
+                    .send()
+                    .await?;
+
+                if !response.status().is_success() {
+                    let status = response.status();
+                    let text = response.text().await.unwrap_or_default();
+                    return Err(anyhow::anyhow!(
+                        "Token exchange failed: {} - {}",
+                        status,
+                        text
+                    ));
+                }
+
+                let token_data: serde_json::Value = response.json().await?;
+
+                Ok(ProviderToken {
+                    access_token: token_data["access_token"]
+                        .as_str()
+                        .ok_or_else(|| anyhow::anyhow!("No access_token in response"))?
+                        .to_string(),
+                    refresh_token: token_data["refresh_token"].as_str().map(|s| s.to_string()),
+                    expires_at: token_data["expires_in"]
+                        .as_i64()
+                        .map(|exp| chrono::Utc::now().timestamp() + exp),
+                })
+            }
             "antigravity" => {
                 // Exchange code with Google OAuth token endpoint
                 let client_id =
@@ -168,6 +238,37 @@ impl OAuthFlow {
 
     pub async fn refresh_access_token(&self, refresh_token: &str) -> Result<ProviderToken> {
         match self.provider.as_str() {
+            "google" | "google-calendar" => {
+                let (client_id, client_secret) = google_oauth_credentials()?;
+
+                let client = reqwest::Client::new();
+                let response = client
+                    .post("https://oauth2.googleapis.com/token")
+                    .form(&[
+                        ("refresh_token", refresh_token),
+                        ("client_id", client_id.as_str()),
+                        ("client_secret", client_secret.as_str()),
+                        ("grant_type", "refresh_token"),
+                    ])
+                    .send()
+                    .await?;
+
+                let token_data: serde_json::Value = response.json().await?;
+
+                Ok(ProviderToken {
+                    access_token: token_data["access_token"]
+                        .as_str()
+                        .ok_or_else(|| anyhow::anyhow!("No access_token in response"))?
+                        .to_string(),
+                    refresh_token: token_data["refresh_token"]
+                        .as_str()
+                        .map(|s| s.to_string())
+                        .or_else(|| Some(refresh_token.to_string())),
+                    expires_at: token_data["expires_in"]
+                        .as_i64()
+                        .map(|exp| chrono::Utc::now().timestamp() + exp),
+                })
+            }
             "antigravity" => {
                 let client_id =
                     "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
@@ -225,6 +326,10 @@ impl OAuthFlow {
 
         let token = self.exchange_code(&code).await?;
 
+        if self.provider == "antigravity" {
+            verify_antigravity_token(&token.access_token).await?;
+        }
+
         let mut tokens = OAuthTokens::load()?;
         tokens.set(self.provider.clone(), token);
         tokens.save()?;
@@ -232,6 +337,85 @@ impl OAuthFlow {
         println!("✓ Successfully authenticated with {}", self.provider);
         Ok(())
     }
+}
+
+async fn verify_antigravity_token(access_token: &str) -> Result<()> {
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "metadata": {
+            "ideType": "IDE_UNSPECIFIED",
+            "platform": "PLATFORM_UNSPECIFIED",
+            "pluginType": "GEMINI"
+        }
+    });
+
+    let response = client
+        .post("https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")
+        .header("Authorization", format!("Bearer {}", access_token))
+        .header("User-Agent", "antigravity/1.99.0 linux/x64")
+        .header(
+            "X-Goog-Api-Client",
+            "google-cloud-sdk vscode_cloudshelleditor/0.1",
+        )
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        return Err(anyhow::anyhow!(
+            "Antigravity token verification failed at loadCodeAssist: {} - {}",
+            status,
+            text
+        ));
+    }
+
+    let payload: serde_json::Value = response.json().await?;
+    let has_project = payload
+        .get("project")
+        .and_then(|v| v.as_str())
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
+        || payload
+            .get("cloudaicompanionProject")
+            .and_then(|v| v.as_str())
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false);
+
+    if !has_project {
+        return Err(anyhow::anyhow!(
+            "Antigravity token verification succeeded but no project id returned"
+        ));
+    }
+
+    Ok(())
+}
+
+fn google_oauth_credentials() -> Result<(String, String)> {
+    if let (Ok(client_id), Ok(client_secret)) = (
+        std::env::var("GOOGLE_OAUTH_CLIENT_ID"),
+        std::env::var("GOOGLE_OAUTH_CLIENT_SECRET"),
+    ) && !client_id.trim().is_empty()
+        && !client_secret.trim().is_empty()
+    {
+        return Ok((client_id, client_secret));
+    }
+
+    if let Ok(config) = crate::config::Config::load()
+        && let Some(google) = config.providers.google
+        && let (Some(client_id), Some(client_secret)) =
+            (google.oauth_client_id, google.oauth_client_secret)
+        && !client_id.trim().is_empty()
+        && !client_secret.trim().is_empty()
+    {
+        return Ok((client_id, client_secret));
+    }
+
+    Err(anyhow::anyhow!(
+        "Missing Google OAuth credentials. Set GOOGLE_OAUTH_CLIENT_ID/GOOGLE_OAUTH_CLIENT_SECRET or run: nanobot config set oauth.google.client_id <value> and nanobot config set oauth.google.client_secret <value>"
+    ))
 }
 
 fn hex_encode(bytes: &[u8]) -> String {

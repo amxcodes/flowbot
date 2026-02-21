@@ -3,6 +3,18 @@ use std::fs;
 use std::path::PathBuf;
 
 const TOKEN_FILE: &str = "admin_token";
+const MIN_ADMIN_TOKEN_LEN: usize = 8;
+
+fn validate_admin_token(token: &str) -> Result<()> {
+    let trimmed = token.trim();
+    if trimmed.len() < MIN_ADMIN_TOKEN_LEN {
+        anyhow::bail!(
+            "Admin token must be at least {} characters",
+            MIN_ADMIN_TOKEN_LEN
+        );
+    }
+    Ok(())
+}
 
 fn token_dir() -> Result<PathBuf> {
     let home = std::env::var("HOME")
@@ -32,8 +44,10 @@ pub fn read_admin_token() -> Result<Option<String>> {
 }
 
 pub fn write_admin_token(token: &str) -> Result<()> {
+    validate_admin_token(token)?;
+
     let path = token_path()?;
-    fs::write(&path, token).context("Failed to write admin token")?;
+    fs::write(&path, token.trim()).context("Failed to write admin token")?;
 
     #[cfg(unix)]
     {

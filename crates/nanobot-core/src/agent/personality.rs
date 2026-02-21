@@ -48,7 +48,7 @@ impl PersonalityContext {
         let path = workspace_dir.join("SOUL.md");
         let content = fs::read_to_string(&path).await.map_err(|e| {
             anyhow::anyhow!(
-                "Failed to load SOUL.md: {}. Run 'flowbot setup --wizard' first.",
+                "Failed to load SOUL.md: {}. Run 'nanobot setup --wizard' first.",
                 e
             )
         })?;

@@ -13,6 +13,9 @@ pub struct EncryptedSecrets {
     pub tokens: HashMap<String, ProviderToken>,
     /// API keys (encrypted)
     pub api_keys: HashMap<String, String>,
+    /// Skill credentials keyed by skill -> key -> value
+    #[serde(default)]
+    pub skill_credentials: HashMap<String, HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,15 +26,26 @@ pub struct ProviderToken {
 }
 
 impl EncryptedSecrets {
+    fn legacy_secrets_path() -> PathBuf {
+        PathBuf::from(".").join(".nanobot").join("secrets.enc")
+    }
+
     /// Load encrypted secrets (requires master password)
     pub fn load(manager: &SecretManager) -> Result<Self> {
         let path = Self::secrets_path();
 
-        if !path.exists() {
-            return Ok(Self::default());
-        }
+        let read_path = if path.exists() {
+            path
+        } else {
+            let legacy = Self::legacy_secrets_path();
+            if legacy.exists() {
+                legacy
+            } else {
+                return Ok(Self::default());
+            }
+        };
 
-        let encrypted_data = fs::read_to_string(&path)?;
+        let encrypted_data = fs::read_to_string(&read_path)?;
         let decrypted_json = manager.decrypt(&encrypted_data)?;
         let secrets: EncryptedSecrets = serde_json::from_str(&decrypted_json)?;
 
@@ -56,7 +70,10 @@ impl EncryptedSecrets {
 
     /// Get secrets file path
     pub fn secrets_path() -> PathBuf {
-        PathBuf::from(".").join(".nanobot").join("secrets.enc")
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".nanobot")
+            .join("secrets.enc")
     }
 
     /// Get API key for a provider
@@ -79,6 +96,17 @@ impl EncryptedSecrets {
         self.tokens.insert(provider, token);
     }
 
+    pub fn get_skill_credential(&self, skill: &str, key: &str) -> Option<&String> {
+        self.skill_credentials.get(skill)?.get(key)
+    }
+
+    pub fn set_skill_credential(&mut self, skill: &str, key: &str, value: String) {
+        self.skill_credentials
+            .entry(skill.to_string())
+            .or_default()
+            .insert(key.to_string(), value);
+    }
+
     /// Migrate from plain text tokens.json
     pub fn migrate_from_plaintext(manager: &SecretManager) -> Result<()> {
         let old_tokens_path = PathBuf::from(".").join(".nanobot").join("tokens.json");
@@ -92,8 +120,10 @@ impl EncryptedSecrets {
         let old_tokens: HashMap<String, ProviderToken> = serde_json::from_str(&old_data)?;
 
         // Create new encrypted secrets
-        let mut secrets = EncryptedSecrets::default();
-        secrets.tokens = old_tokens;
+        let secrets = EncryptedSecrets {
+            tokens: old_tokens,
+            ..EncryptedSecrets::default()
+        };
 
         // Save encrypted
         secrets.save(manager)?;
@@ -102,8 +132,8 @@ impl EncryptedSecrets {
         let backup_path = old_tokens_path.with_extension("json.bak");
         fs::rename(&old_tokens_path, &backup_path)?;
 
-        eprintln!("✅ Migrated tokens.json to encrypted storage");
-        eprintln!("   Backup saved to: {:?}", backup_path);
+        tracing::info!("Migrated tokens.json to encrypted storage");
+        tracing::info!("Backup saved to: {:?}", backup_path);
 
         Ok(())
     }
@@ -126,19 +156,19 @@ impl EncryptedSecrets {
         // Extract API keys from providers section
         if let Some(providers) = config.get("providers").and_then(|v| v.as_table()) {
             for (provider_name, provider_config) in providers {
-                if let Some(api_key) = provider_config.get("api_key").and_then(|v| v.as_str()) {
-                    if !api_key.is_empty() {
-                        secrets.set_api_key(provider_name.clone(), api_key.to_string());
-                        modified = true;
-                    }
+                if let Some(api_key) = provider_config.get("api_key").and_then(|v| v.as_str())
+                    && !api_key.is_empty()
+                {
+                    secrets.set_api_key(provider_name.clone(), api_key.to_string());
+                    modified = true;
                 }
             }
         }
 
         if modified {
             secrets.save(manager)?;
-            eprintln!("✅ Migrated API keys from config.toml to encrypted storage");
-            eprintln!("   You should now remove api_key fields from config.toml");
+            tracing::info!("Migrated API keys from config.toml to encrypted storage");
+            tracing::info!("You should now remove api_key fields from config.toml");
         }
 
         Ok(())

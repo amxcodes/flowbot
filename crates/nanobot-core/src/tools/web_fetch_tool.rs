@@ -1,6 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::definitions::Tool;
 use super::fetch::{WebFetchArgs, web_fetch};

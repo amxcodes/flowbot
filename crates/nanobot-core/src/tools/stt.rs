@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde_json::Value;
 use tokio::process::Command;
 
@@ -36,11 +36,7 @@ async fn resolve_whisper_invocation(args: &Value) -> Result<WhisperInvocation> {
         });
     }
 
-    for (program, prefix_args) in [
-        ("python", vec![]),
-        ("python3", vec![]),
-        ("py", vec!["-3"]),
-    ] {
+    for (program, prefix_args) in [("python", vec![]), ("python3", vec![]), ("py", vec!["-3"])] {
         let mut cmd = Command::new(program);
         cmd.args(prefix_args.clone())
             .arg("-m")
@@ -72,18 +68,14 @@ pub async fn execute_stt(args: &Value) -> Result<String> {
         .ok_or_else(|| anyhow!("Missing 'audio_path' field"))?;
     let audio_path = crate::tools::validate_path(audio_path)?;
 
-    let model = args["model"]
-        .as_str()
-        .unwrap_or("base");
+    let model = args["model"].as_str().unwrap_or("base");
     let output_dir = args["output_dir"]
         .as_str()
         .map(|s| s.to_string())
         .unwrap_or_else(|| "stt_output".to_string());
     let output_dir = crate::tools::validate_path(&output_dir)?;
 
-    let format = args["format"]
-        .as_str()
-        .unwrap_or("txt");
+    let format = args["format"].as_str().unwrap_or("txt");
 
     let whisper = resolve_whisper_invocation(args).await?;
 

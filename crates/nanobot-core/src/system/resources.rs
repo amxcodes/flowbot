@@ -1,7 +1,7 @@
-use sysinfo::System;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use sysinfo::System;
 use tokio::time;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -13,20 +13,26 @@ pub struct ResourceUsage {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResourceLevel {
-    High,    // Abundant resources
-    Medium,  // Moderate resources
-    Low,     // Constrained resources
+    High,   // Abundant resources
+    Medium, // Moderate resources
+    Low,    // Constrained resources
 }
 
 #[derive(Debug, Clone)]
 pub struct AdaptiveConfig {
-    pub max_tokens: u64,  // Changed to u64 for LLM API compatibility
+    pub max_tokens: u64, // Changed to u64 for LLM API compatibility
     pub rag_doc_count: usize,
     pub context_history_limit: usize,
 }
 
 pub struct ResourceMonitor {
     system: Arc<Mutex<System>>,
+}
+
+impl Default for ResourceMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ResourceMonitor {
@@ -53,7 +59,7 @@ impl ResourceMonitor {
         let sys = self.system.lock().unwrap();
         // Refresh called periodically, but we can also force refresh here if needed
         // sys.refresh_cpu(); // Blocking call
-        
+
         let cpu_usage = sys.global_cpu_info().cpu_usage();
         let total_memory = sys.total_memory() / 1024 / 1024;
         let used_memory = sys.used_memory() / 1024 / 1024;
@@ -80,12 +86,16 @@ impl ResourceMonitor {
     pub fn get_resource_level(&self) -> ResourceLevel {
         let usage = self.get_usage();
         let free_memory = usage.total_memory_mb - usage.used_memory_mb;
-        let memory_usage_percent = (usage.used_memory_mb as f32 / usage.total_memory_mb as f32) * 100.0;
+        let memory_usage_percent =
+            (usage.used_memory_mb as f32 / usage.total_memory_mb as f32) * 100.0;
 
         // Conservative thresholds for adaptive behavior
         if free_memory < 512 || memory_usage_percent > 85.0 || usage.cpu_usage_percent > 80.0 {
             ResourceLevel::Low
-        } else if free_memory < 2048 || memory_usage_percent > 70.0 || usage.cpu_usage_percent > 60.0 {
+        } else if free_memory < 2048
+            || memory_usage_percent > 70.0
+            || usage.cpu_usage_percent > 60.0
+        {
             ResourceLevel::Medium
         } else {
             ResourceLevel::High

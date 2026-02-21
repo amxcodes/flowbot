@@ -1,14 +1,13 @@
 use anyhow::Result;
-use opentelemetry::global;
-use opentelemetry_sdk::trace::Tracer;
-use opentelemetry_sdk::Resource;
 use opentelemetry::KeyValue;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use opentelemetry::global;
+use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::trace::Tracer;
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Initialize tracing with OpenTelemetry support
 pub fn init_tracing(service_name: &str, otlp_endpoint: Option<String>) -> Result<()> {
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     let registry = tracing_subscriber::registry()
         .with(env_filter)
@@ -18,10 +17,13 @@ pub fn init_tracing(service_name: &str, otlp_endpoint: Option<String>) -> Result
     if let Some(endpoint) = otlp_endpoint {
         let tracer = init_otlp_tracer(service_name, &endpoint)?;
         let telemetry_layer = tracing_opentelemetry::layer().with_tracer(tracer);
-        
+
         registry.with(telemetry_layer).init();
-        
-        tracing::info!("OpenTelemetry tracing initialized with endpoint: {}", endpoint);
+
+        tracing::info!(
+            "OpenTelemetry tracing initialized with endpoint: {}",
+            endpoint
+        );
     } else {
         registry.init();
         tracing::info!("Basic tracing initialized (no OTLP export)");
@@ -33,7 +35,7 @@ pub fn init_tracing(service_name: &str, otlp_endpoint: Option<String>) -> Result
 /// Initialize OpenTelemetry OTLP exporter
 fn init_otlp_tracer(service_name: &str, endpoint: &str) -> Result<Tracer> {
     use opentelemetry_otlp::WithExportConfig;
-    
+
     let exporter = opentelemetry_otlp::new_exporter()
         .tonic()
         .with_endpoint(endpoint);
@@ -41,12 +43,12 @@ fn init_otlp_tracer(service_name: &str, endpoint: &str) -> Result<Tracer> {
     let tracer = opentelemetry_otlp::new_pipeline()
         .tracing()
         .with_exporter(exporter)
-        .with_trace_config(
-            opentelemetry_sdk::trace::Config::default()
-                .with_resource(Resource::new(vec![
-                    KeyValue::new("service.name", service_name.to_string()),
-                ])),
-        )
+        .with_trace_config(opentelemetry_sdk::trace::Config::default().with_resource(
+            Resource::new(vec![KeyValue::new(
+                "service.name",
+                service_name.to_string(),
+            )]),
+        ))
         .install_batch(opentelemetry_sdk::runtime::Tokio)?;
 
     Ok(tracer)

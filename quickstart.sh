@@ -25,6 +25,26 @@ fi
 echo "✓ Configuration found"
 echo ""
 
+# Runtime readiness for skills
+if ! command -v deno >/dev/null 2>&1; then
+    echo "⚠️  Deno not found. Install Deno for community skills (recommended)."
+fi
+
+if ! command -v gh >/dev/null 2>&1; then
+    echo "⚠️  gh CLI not found. Install GitHub CLI for github skill."
+fi
+
+if ! command -v node >/dev/null 2>&1; then
+    echo "ℹ️  Node.js not found. Optional, only needed for some legacy skill fallbacks."
+fi
+
+if ! command -v gog >/dev/null 2>&1; then
+    echo "ℹ️  gog CLI not found. Needed for Google Workspace gog skill."
+fi
+
+echo "💡 Run 'nanobot doctor' for full dependency checks."
+echo ""
+
 # Check if built
 if [ ! -f "target/release/nanobot" ]; then
     echo "🔨 Building (first time - may take 5-10 minutes)..."
@@ -34,7 +54,10 @@ if [ ! -f "target/release/nanobot" ]; then
 fi
 
 # Check if OAuth is needed
-if [ -z "$ANTIGRAVITY_API_KEY" ] && [ ! -f "$HOME/.antigravity/tokens.json" ]; then
+if [ -z "${ANTIGRAVITY_API_KEY:-}" ] \
+    && [ ! -f "$HOME/.nanobot/secrets.enc" ] \
+    && [ ! -f "$HOME/.nanobot/tokens.json" ] \
+    && [ ! -f "$HOME/.openclaw/auth/tokens.json" ]; then
     echo "🔐 Antigravity OAuth setup required"
     echo "   Run: cargo run --release -- login antigravity"
     echo ""

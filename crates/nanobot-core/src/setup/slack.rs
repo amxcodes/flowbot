@@ -53,8 +53,14 @@ pub async fn run_slack_setup_wizard() -> Result<()> {
     }
 
     println!();
-    println!("{}", style("✅ Slack configured successfully!").green().bold());
-    println!("{}", style("   Socket Mode enabled, ready to connect").cyan());
-    
+    println!(
+        "{}",
+        style("✅ Slack configured successfully!").green().bold()
+    );
+    println!(
+        "{}",
+        style("   Socket Mode enabled, ready to connect").cyan()
+    );
+
     Ok(())
 }

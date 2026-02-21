@@ -20,7 +20,11 @@ pub struct LLMConfig {
 }
 
 fn default_failover_chain() -> Vec<String> {
-    vec!["antigravity".to_string(), "anthropic".to_string(), "openai".to_string()]
+    vec![
+        "antigravity".to_string(),
+        "anthropic".to_string(),
+        "openai".to_string(),
+    ]
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
