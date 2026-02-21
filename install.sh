@@ -91,6 +91,7 @@ retry_cmd() {
 }
 
 SOURCE_DIR=""
+SOURCE_INSTALL_DIR=""
 TEMP_CLONE_DIR=""
 AUTO_MODE=0
 RUN_WIZARD_AFTER="ask"
@@ -331,6 +332,11 @@ cleanup_temp_clone() {
 prepare_source_dir() {
     if [ -f "Cargo.toml" ]; then
         SOURCE_DIR="$(pwd)"
+        if [ -f "$SOURCE_DIR/crates/nanobot-cli/Cargo.toml" ]; then
+            SOURCE_INSTALL_DIR="$SOURCE_DIR/crates/nanobot-cli"
+        else
+            SOURCE_INSTALL_DIR="$SOURCE_DIR"
+        fi
         return 0
     fi
 
@@ -398,6 +404,11 @@ prepare_source_dir() {
     fi
 
     SOURCE_DIR="$TEMP_CLONE_DIR"
+    if [ -f "$SOURCE_DIR/crates/nanobot-cli/Cargo.toml" ]; then
+        SOURCE_INSTALL_DIR="$SOURCE_DIR/crates/nanobot-cli"
+    else
+        SOURCE_INSTALL_DIR="$SOURCE_DIR"
+    fi
 }
 
 install_prebuilt_binary_if_configured() {
@@ -512,14 +523,20 @@ dep_satisfied() {
         pip3)
             has_cmd pip3 || python3 -m pip --version >/dev/null 2>&1 || python -m pip --version >/dev/null 2>&1
             ;;
+        docker)
+            has_cmd docker || has_cmd docker.io
+            ;;
         docker-compose)
-            has_cmd docker-compose || docker compose version >/dev/null 2>&1
+            has_cmd docker-compose || has_cmd docker-compose-plugin || docker compose version >/dev/null 2>&1
             ;;
         chromium)
             has_cmd chromium || has_cmd chromium-browser || has_cmd google-chrome || has_cmd google-chrome-stable || has_cmd chrome || has_cmd msedge
             ;;
         chromium-runtime-libs)
             if [ "$OS_FAMILY" != "linux" ]; then
+                return 0
+            fi
+            if dep_satisfied chromium; then
                 return 0
             fi
             if has_cmd ldconfig; then
@@ -1308,7 +1325,7 @@ pkg_for() {
                 pip3) echo "python3-pip" ;;
                 ffmpeg) echo "ffmpeg" ;;
                 docker) echo "docker" ;;
-                docker-compose) echo "docker-compose-plugin" ;;
+                docker-compose) echo "docker-compose-plugin docker-compose" ;;
                 chromium) echo "chromium" ;;
                 chromium-runtime-libs) echo "nss atk at-spi2-atk libXcomposite libXdamage libXrandr mesa-libgbm alsa-lib libxshmfence gtk3 liberation-fonts" ;;
                 nodejs) echo "nodejs" ;;
@@ -1340,7 +1357,7 @@ pkg_for() {
                 pip3) echo "python3-pip" ;;
                 ffmpeg) echo "ffmpeg" ;;
                 docker) echo "docker" ;;
-                docker-compose) echo "docker-compose-plugin" ;;
+                docker-compose) echo "docker-compose-plugin docker-compose" ;;
                 chromium) echo "chromium" ;;
                 chromium-runtime-libs) echo "nss atk at-spi2-atk libXcomposite libXdamage libXrandr mesa-libgbm alsa-lib libxshmfence gtk3 liberation-fonts" ;;
                 nodejs) echo "nodejs" ;;
@@ -1740,6 +1757,8 @@ if install_prebuilt_binary_if_configured; then
 else
     prepare_source_dir
 
+    log_info "Using cargo install path: $SOURCE_INSTALL_DIR"
+
     log_info "Building and installing Nanobot..."
 
     requested_features="${NANOBOT_CARGO_FEATURES:-}"
@@ -1756,9 +1775,9 @@ else
 
     if [ -n "$requested_features" ]; then
         log_info "Cargo features enabled: $requested_features"
-        (cd "$SOURCE_DIR" && cargo install --path . --force --features "$requested_features")
+        (cd "$SOURCE_INSTALL_DIR" && cargo install --path . --force --features "$requested_features")
     else
-        (cd "$SOURCE_DIR" && cargo install --path . --force)
+        (cd "$SOURCE_INSTALL_DIR" && cargo install --path . --force)
     fi
 fi
 

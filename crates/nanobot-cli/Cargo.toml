@@ -35,3 +35,7 @@ rust-embed = { workspace = true }
 console.workspace = true
 rpassword = { workspace = true }
 jsonwebtoken = { workspace = true }
+
+[features]
+default = []
+distributed-redis = ["nanobot-core/distributed-redis"]
