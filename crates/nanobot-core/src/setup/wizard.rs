@@ -744,7 +744,7 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
     // 14. Browser capability setup (non-technical defaults)
     println!();
     println!("{}", style("Browser Automation Setup").bold().cyan());
-    let docker_available = command_exists("docker");
+    let docker_available = docker_exists();
     let local_browser_available = has_local_browser();
 
     let docker_option = if docker_available {
@@ -851,6 +851,16 @@ fn command_exists(cmd: &str) -> bool {
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false)
+}
+
+fn docker_exists() -> bool {
+    if command_exists("docker") {
+        return true;
+    }
+
+    ["/usr/bin/docker", "/usr/local/bin/docker", "/snap/bin/docker"]
+        .iter()
+        .any(|candidate| command_exists(candidate))
 }
 
 fn has_local_browser() -> bool {

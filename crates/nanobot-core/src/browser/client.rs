@@ -7,6 +7,25 @@ use futures::StreamExt;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+fn command_works(cmd: &str) -> bool {
+    std::process::Command::new(cmd)
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn docker_command() -> Option<String> {
+    if command_works("docker") {
+        return Some("docker".to_string());
+    }
+
+    ["/usr/bin/docker", "/usr/local/bin/docker", "/snap/bin/docker"]
+        .iter()
+        .find(|candidate| command_works(candidate))
+        .map(|s| s.to_string())
+}
+
 fn env_truthy(key: &str) -> Option<bool> {
     std::env::var(key).ok().map(|v| {
         matches!(
@@ -82,13 +101,19 @@ impl BrowserClient {
         tracing::info!("🌐 Launching new browser instance...");
 
         let (browser, mut handler) = if self.config.use_docker {
+            let docker_bin = docker_command().ok_or_else(|| {
+                anyhow!(
+                    "Docker CLI not found. Install Docker or add it to PATH, then retry browser setup."
+                )
+            })?;
+
             // Docker Logic
             let port = self.config.docker_port;
             let image = &self.config.docker_image;
             let container_name = "nanobot-browser";
 
             // 1. Check if container exists/running
-            let status = std::process::Command::new("docker")
+            let status = std::process::Command::new(&docker_bin)
                 .args(["inspect", "-f", "{{.State.Running}}", container_name])
                 .output();
 
@@ -100,7 +125,7 @@ impl BrowserClient {
                     } else {
                         // Exists but stopped, or doesn't exist (stderr)
                         // Should probably remove and run fresh to be safe
-                        let _ = std::process::Command::new("docker")
+                        let _ = std::process::Command::new(&docker_bin)
                             .args(["rm", "-f", container_name])
                             .output();
                         true
@@ -115,7 +140,7 @@ impl BrowserClient {
                     image,
                     port
                 );
-                let _ = std::process::Command::new("docker")
+                let _ = std::process::Command::new(&docker_bin)
                     .args([
                         "run",
                         "-d",

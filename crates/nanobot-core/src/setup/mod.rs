@@ -35,18 +35,23 @@ async fn generate_config(result: &SetupResult) -> Result<()> {
 
     println!("📝 Generating config.toml...");
 
+    let existing_config = Config::load().ok();
+
     // 1. Determine Provider Config
-    let mut providers = Providers {
-        antigravity: None,
-        openai: None,
-        openrouter: None,
-        telegram: None, // Will be filled if token exists in env or if we want to prompt
-        teams: None,
-        google_chat: None,
-        google: None,
-        slack: None,
-        discord: None,
-    };
+    let mut providers = existing_config
+        .as_ref()
+        .map(|c| c.providers.clone())
+        .unwrap_or(Providers {
+            antigravity: None,
+            openai: None,
+            openrouter: None,
+            telegram: None,
+            teams: None,
+            google_chat: None,
+            google: None,
+            slack: None,
+            discord: None,
+        });
 
     if let Some(provider) = &result.oauth_provider
         && provider.as_str() == "antigravity"

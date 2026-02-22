@@ -6,6 +6,25 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::process::Stdio;
 
+fn command_works(cmd: &str) -> bool {
+    std::process::Command::new(cmd)
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn docker_command() -> Option<String> {
+    if command_works("docker") {
+        return Some("docker".to_string());
+    }
+
+    ["/usr/bin/docker", "/usr/local/bin/docker", "/snap/bin/docker"]
+        .iter()
+        .find(|candidate| command_works(candidate))
+        .map(|s| s.to_string())
+}
+
 /// Configuration for Docker execution
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DockerConfig {
@@ -60,7 +79,9 @@ pub async fn run_docker_command(args: RunCommandArgs) -> Result<CommandOutput> {
     // Append arguments to the command being run inside Docker
     docker_args.extend(args.args);
 
-    let mut cmd = tokio::process::Command::new("docker");
+    let docker_bin =
+        docker_command().ok_or_else(|| anyhow::anyhow!("Docker CLI not found on this system"))?;
+    let mut cmd = tokio::process::Command::new(&docker_bin);
     cmd.args(&docker_args);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());

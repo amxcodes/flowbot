@@ -1,13 +1,28 @@
 use anyhow::Result;
 use std::process::Command;
 
-/// Check if Docker is available on the system
-pub fn is_docker_available() -> bool {
-    Command::new("docker")
+fn command_works(cmd: &str) -> bool {
+    Command::new(cmd)
         .arg("--version")
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false)
+}
+
+fn docker_command() -> Option<String> {
+    if command_works("docker") {
+        return Some("docker".to_string());
+    }
+
+    ["/usr/bin/docker", "/usr/local/bin/docker", "/snap/bin/docker"]
+        .iter()
+        .find(|candidate| command_works(candidate))
+        .map(|s| s.to_string())
+}
+
+/// Check if Docker is available on the system
+pub fn is_docker_available() -> bool {
+    docker_command().is_some()
 }
 
 pub struct SandboxConfig {
@@ -36,6 +51,9 @@ pub async fn execute_in_container(
     args: &[String],
     config: &SandboxConfig,
 ) -> Result<String> {
+    let docker_bin =
+        docker_command().ok_or_else(|| anyhow::anyhow!("Docker CLI not found on this system"))?;
+
     let current_dir = std::env::current_dir()?;
     let mount_path = current_dir
         .to_str()
@@ -44,7 +62,7 @@ pub async fn execute_in_container(
     // Use a fixed container name or random? Random is better for concurrency.
     // Docker run --rm handles cleanup.
 
-    let mut docker_cmd = Command::new("docker");
+    let mut docker_cmd = Command::new(&docker_bin);
     docker_cmd.arg("run");
     docker_cmd.arg("--rm"); // Remove container after execution
 

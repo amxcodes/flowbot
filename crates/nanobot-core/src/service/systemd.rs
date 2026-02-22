@@ -8,6 +8,28 @@ use super::types::{ServiceRuntime, ServiceStatus};
 
 const SERVICE_NAME: &str = "nanobot";
 
+fn is_user_bus_error(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    lower.contains("failed to connect to bus")
+        || lower.contains("dbus_session_bus_address")
+        || lower.contains("xdg_runtime_dir")
+        || lower.contains("no medium found")
+}
+
+fn systemctl_user_error(action: &str, stderr: &str) -> anyhow::Error {
+    if is_user_bus_error(stderr) {
+        anyhow::anyhow!(
+            "Failed to {} (user systemd session is unavailable): {}\n\
+             Hint: run from a normal login shell for your non-root user, then retry `nanobot service install`.\n\
+             If this is a headless/root-only environment, run gateway via tmux/screen or install a system service manually.",
+            action,
+            stderr.trim()
+        )
+    } else {
+        anyhow::anyhow!("Failed to {}: {}", action, stderr.trim())
+    }
+}
+
 fn parse_systemd_uptime_seconds(stdout: &str) -> Option<u64> {
     // Example: Active: active (running) since ...; 2h 3min ago
     let active_line = stdout.lines().find(|line| line.contains("Active:"))?;
@@ -188,10 +210,8 @@ pub fn install() -> Result<()> {
         .context("Failed to reload systemd daemon")?;
 
     if !output.status.success() {
-        anyhow::bail!(
-            "Failed to reload systemd daemon: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(systemctl_user_error("reload systemd daemon", &stderr));
     }
 
     println!("✅ Systemd daemon reloaded");
@@ -203,10 +223,8 @@ pub fn install() -> Result<()> {
         .context("Failed to enable service")?;
 
     if !enable_output.status.success() {
-        anyhow::bail!(
-            "Failed to enable service: {}",
-            String::from_utf8_lossy(&enable_output.stderr)
-        );
+        let stderr = String::from_utf8_lossy(&enable_output.stderr);
+        return Err(systemctl_user_error("enable service", &stderr));
     }
 
     println!("✅ Service enabled for auto-start");
@@ -249,10 +267,8 @@ pub fn uninstall() -> Result<()> {
         .context("Failed to reload systemd daemon")?;
 
     if !output.status.success() {
-        anyhow::bail!(
-            "Failed to reload systemd daemon: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(systemctl_user_error("reload systemd daemon", &stderr));
     }
 
     println!("✅ Service uninstalled successfully");
@@ -268,10 +284,8 @@ pub fn start() -> Result<()> {
         .context("Failed to start service")?;
 
     if !output.status.success() {
-        anyhow::bail!(
-            "Failed to start service: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(systemctl_user_error("start service", &stderr));
     }
 
     println!("✅ Service started");
@@ -286,10 +300,8 @@ pub fn stop() -> Result<()> {
         .context("Failed to stop service")?;
 
     if !output.status.success() {
-        anyhow::bail!(
-            "Failed to stop service: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(systemctl_user_error("stop service", &stderr));
     }
 
     println!("✅ Service stopped");
@@ -304,10 +316,8 @@ pub fn restart() -> Result<()> {
         .context("Failed to restart service")?;
 
     if !output.status.success() {
-        anyhow::bail!(
-            "Failed to restart service: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(systemctl_user_error("restart service", &stderr));
     }
 
     println!("✅ Service restarted");

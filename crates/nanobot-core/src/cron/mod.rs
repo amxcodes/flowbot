@@ -145,12 +145,35 @@ pub struct CronScheduler {
 
 impl CronScheduler {
     pub async fn new(db_path: PathBuf, event_tx: mpsc::Sender<AgentEvent>) -> Result<Self> {
+        Self::ensure_cron_schema(&db_path)?;
         let scheduler = JobScheduler::new().await?;
         Ok(Self {
             db_path,
             scheduler,
             event_tx,
         })
+    }
+
+    fn ensure_cron_schema(db_path: &PathBuf) -> Result<()> {
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let conn = Connection::open(db_path)?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS cron_jobs (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                schedule_kind TEXT NOT NULL,
+                schedule_data TEXT NOT NULL,
+                payload_kind TEXT NOT NULL,
+                payload_data TEXT NOT NULL,
+                session_target TEXT NOT NULL,
+                enabled INTEGER DEFAULT 1,
+                created_at INTEGER NOT NULL
+            )",
+            [],
+        )?;
+        Ok(())
     }
 
     /// Start the scheduler
