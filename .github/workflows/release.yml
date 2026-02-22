@@ -26,7 +26,7 @@ jobs:
             asset_name: nanobot-macos-amd64
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -34,10 +34,32 @@ jobs:
     - name: Build
       run: cargo build --release --verbose
 
+    - name: Prepare release artifact
+      if: runner.os != 'Windows'
+      run: |
+        cp "target/release/${{ matrix.artifact_name }}" "target/release/${{ matrix.asset_name }}"
+        shasum -a 256 "target/release/${{ matrix.asset_name }}" | awk '{print $1}' > "target/release/${{ matrix.asset_name }}.sha256"
+
+    - name: Prepare release artifact (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        Copy-Item "target/release/${{ matrix.artifact_name }}" "target/release/${{ matrix.asset_name }}" -Force
+        $hash = (Get-FileHash "target/release/${{ matrix.asset_name }}" -Algorithm SHA256).Hash.ToLower()
+        Set-Content -Path "target/release/${{ matrix.asset_name }}.sha256" -Value $hash -NoNewline
+
     - name: Upload binaries to release
       uses: svenstaro/upload-release-action@v2
       with:
         repo_token: ${{ secrets.GITHUB_TOKEN }}
-        file: target/release/${{ matrix.artifact_name }}
+        file: target/release/${{ matrix.asset_name }}
         asset_name: ${{ matrix.asset_name }}
+        tag: ${{ github.ref }}
+
+    - name: Upload checksums to release
+      uses: svenstaro/upload-release-action@v2
+      with:
+        repo_token: ${{ secrets.GITHUB_TOKEN }}
+        file: target/release/${{ matrix.asset_name }}.sha256
+        asset_name: ${{ matrix.asset_name }}.sha256
         tag: ${{ github.ref }}

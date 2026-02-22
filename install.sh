@@ -101,6 +101,9 @@ NANOBOT_INSTALL_METHOD="${NANOBOT_INSTALL_METHOD:-auto}"
 NANOBOT_BINARY_URL="${NANOBOT_BINARY_URL:-}"
 NANOBOT_BINARY_SHA256="${NANOBOT_BINARY_SHA256:-}"
 NANOBOT_BINARY_SHA256_URL="${NANOBOT_BINARY_SHA256_URL:-}"
+NANOBOT_GITHUB_REPO="${NANOBOT_GITHUB_REPO:-amxcodes/flowbot}"
+NANOBOT_RELEASE_TAG="${NANOBOT_RELEASE_TAG:-}"
+NANOBOT_BINARY_ARCH="${NANOBOT_BINARY_ARCH:-}"
 NANOBOT_BINARY_SIG_URL="${NANOBOT_BINARY_SIG_URL:-}"
 NANOBOT_COSIGN_PUBKEY="${NANOBOT_COSIGN_PUBKEY:-}"
 NANOBOT_REQUIRE_BINARY_CHECKSUM="${NANOBOT_REQUIRE_BINARY_CHECKSUM:-1}"
@@ -210,6 +213,35 @@ normalize_install_method() {
     esac
 }
 
+detect_binary_os() {
+    case "$(uname -s 2>/dev/null || echo unknown)" in
+        Linux*) echo "linux" ;;
+        Darwin*) echo "macos" ;;
+        MINGW*|MSYS*|CYGWIN*|Windows_NT*) echo "windows" ;;
+        *) echo "" ;;
+    esac
+}
+
+detect_binary_arch() {
+    local raw="${NANOBOT_BINARY_ARCH:-$(uname -m 2>/dev/null || echo unknown)}"
+    case "$raw" in
+        x86_64|amd64) echo "amd64" ;;
+        aarch64|arm64) echo "arm64" ;;
+        *) echo "" ;;
+    esac
+}
+
+infer_binary_asset_name() {
+    local os="$1"
+    local arch="$2"
+    case "$os-$arch" in
+        linux-amd64) echo "nanobot-linux-amd64" ;;
+        macos-amd64) echo "nanobot-macos-amd64" ;;
+        windows-amd64) echo "nanobot-windows-amd64.exe" ;;
+        *) echo "" ;;
+    esac
+}
+
 infer_use_case_profile() {
     local deploy_target
     deploy_target=$(printf '%s' "${NANOBOT_DEPLOY_TARGET:-}" | tr '[:upper:]' '[:lower:]')
@@ -286,7 +318,7 @@ resolve_install_method() {
     fi
 
     if [ "$normalized" = "auto" ]; then
-        if [ -n "$NANOBOT_BINARY_URL" ]; then
+        if [ -n "$NANOBOT_BINARY_URL" ] || [ -n "$NANOBOT_RELEASE_TAG" ]; then
             NANOBOT_INSTALL_METHOD="binary"
         else
             NANOBOT_INSTALL_METHOD="source"
@@ -297,6 +329,41 @@ resolve_install_method() {
 }
 
 resolve_install_method
+
+resolve_binary_defaults() {
+    if [ "$NANOBOT_INSTALL_METHOD" != "binary" ]; then
+        return 0
+    fi
+
+    if [ -z "$NANOBOT_BINARY_URL" ]; then
+        local release_tag os arch asset
+        release_tag="${NANOBOT_RELEASE_TAG:-${NANOBOT_REPO_REF:-}}"
+        os=$(detect_binary_os)
+        arch=$(detect_binary_arch)
+
+        if [ -z "$release_tag" ] || [ -z "$os" ] || [ -z "$arch" ]; then
+            log_err "Binary install needs NANOBOT_BINARY_URL, or NANOBOT_RELEASE_TAG + supported OS/arch."
+            log_err "Supported auto assets: linux-amd64, macos-amd64, windows-amd64"
+            exit 1
+        fi
+
+        asset=$(infer_binary_asset_name "$os" "$arch")
+        if [ -z "$asset" ]; then
+            log_err "No release asset mapping for ${os}-${arch}. Set NANOBOT_BINARY_URL manually."
+            exit 1
+        fi
+
+        NANOBOT_BINARY_URL="https://github.com/${NANOBOT_GITHUB_REPO}/releases/download/${release_tag}/${asset}"
+        log_info "Resolved binary URL: $NANOBOT_BINARY_URL"
+    fi
+
+    if [ -z "$NANOBOT_BINARY_SHA256" ] && [ -z "$NANOBOT_BINARY_SHA256_URL" ]; then
+        NANOBOT_BINARY_SHA256_URL="${NANOBOT_BINARY_URL}.sha256"
+        log_info "Resolved checksum URL: $NANOBOT_BINARY_SHA256_URL"
+    fi
+}
+
+resolve_binary_defaults
 
 use_case_label() {
     case "$USE_CASE_PROFILE" in
