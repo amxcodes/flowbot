@@ -323,6 +323,15 @@ requires_source_build() {
     [ "$NANOBOT_INSTALL_METHOD" = "source" ]
 }
 
+recommend_low_memory_build() {
+    if [ "$OS_FAMILY" != "linux" ] || [ ! -r /proc/meminfo ]; then
+        return 1
+    fi
+    local mem_kb
+    mem_kb=$(awk '/MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)
+    [ "${mem_kb:-0}" -gt 0 ] && [ "$mem_kb" -lt 3500000 ]
+}
+
 cleanup_temp_clone() {
     if [ -n "${TEMP_CLONE_DIR:-}" ] && [ -d "$TEMP_CLONE_DIR" ]; then
         rm -rf "$TEMP_CLONE_DIR" || true
@@ -1773,11 +1782,32 @@ else
         fi
     fi
 
+    if recommend_low_memory_build && [ -z "${CARGO_BUILD_JOBS:-}" ]; then
+        export CARGO_BUILD_JOBS=1
+        log_info "Low-memory environment detected. Using CARGO_BUILD_JOBS=1"
+    fi
+
+    cargo_install_cmd=(cargo install --path . --force)
     if [ -n "$requested_features" ]; then
         log_info "Cargo features enabled: $requested_features"
-        (cd "$SOURCE_INSTALL_DIR" && cargo install --path . --force --features "$requested_features")
-    else
-        (cd "$SOURCE_INSTALL_DIR" && cargo install --path . --force)
+        cargo_install_cmd+=(--features "$requested_features")
+    fi
+
+    if ! (cd "$SOURCE_INSTALL_DIR" && "${cargo_install_cmd[@]}"); then
+        if [ -z "${CARGO_BUILD_JOBS:-}" ] || [ "$CARGO_BUILD_JOBS" != "1" ]; then
+            log_warn "Build failed. Retrying once with CARGO_BUILD_JOBS=1 (lower memory mode)..."
+            if (cd "$SOURCE_INSTALL_DIR" && CARGO_BUILD_JOBS=1 "${cargo_install_cmd[@]}"); then
+                :
+            else
+                log_err "Build failed after low-memory retry."
+                log_err "Tip: add swap or use binary install method when release assets are available."
+                exit 1
+            fi
+        else
+            log_err "Build failed in low-memory mode."
+            log_err "Tip: add swap or use binary install method when release assets are available."
+            exit 1
+        fi
     fi
 fi
 
