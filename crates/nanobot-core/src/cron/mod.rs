@@ -188,7 +188,15 @@ impl CronScheduler {
         let jobs = self.list_jobs(false)?;
         println!("📂 Loading {} enabled cron jobs from DB", jobs.len());
         for job in jobs {
-            self.register_job_runtime(job).await?;
+            if let Err(e) = self.register_job_runtime(job.clone()).await {
+                tracing::warn!(
+                    "Skipping invalid cron job {} ({}): {}",
+                    job.id,
+                    job.name.as_deref().unwrap_or("unnamed"),
+                    e
+                );
+                let _ = self.disable_job(&job.id);
+            }
         }
         Ok(())
     }
@@ -281,6 +289,10 @@ impl CronScheduler {
                 self.scheduler.add(job_handle).await?;
             }
             Schedule::Every { every_ms, .. } => {
+                if *every_ms == 0 {
+                    return Err(anyhow!("Invalid interval for job {}: every_ms=0", job_id));
+                }
+
                 let job_id = job_id.clone();
                 let event_tx = event_tx.clone();
                 let payload = payload.clone();
@@ -421,7 +433,10 @@ impl CronScheduler {
         )?;
 
         // Register with tokio-cron-scheduler
-        self.register_job_runtime(job.clone()).await?;
+        if let Err(e) = self.register_job_runtime(job.clone()).await {
+            let _ = conn.execute("DELETE FROM cron_jobs WHERE id = ?1", params![job.id]);
+            return Err(e);
+        }
 
         Ok(job.id)
     }
@@ -437,34 +452,67 @@ impl CronScheduler {
         };
 
         let mut stmt = conn.prepare(query)?;
-        let job_iter = stmt.query_map([], |row| {
+        let mut rows = stmt.query([])?;
+        let mut jobs = Vec::new();
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let name: Option<String> = row.get(1)?;
             let schedule_data: String = row.get(3)?;
             let payload_data: String = row.get(5)?;
             let session_target_str: String = row.get(6)?;
+            let enabled: bool = row.get(7)?;
+            let created_at: u64 = row.get(8)?;
 
-            Ok(CronJob {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                schedule: serde_json::from_str(&schedule_data).unwrap(),
-                payload: serde_json::from_str(&payload_data).unwrap(),
+            let schedule = match serde_json::from_str::<Schedule>(&schedule_data) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(
+                        "Skipping malformed cron schedule for job {} ({}): {}",
+                        id,
+                        name.as_deref().unwrap_or("unnamed"),
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            let payload = match serde_json::from_str::<Payload>(&payload_data) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!(
+                        "Skipping malformed cron payload for job {} ({}): {}",
+                        id,
+                        name.as_deref().unwrap_or("unnamed"),
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            jobs.push(CronJob {
+                id,
+                name,
+                schedule,
+                payload,
                 session_target: match session_target_str.as_str() {
                     "main" => SessionTarget::Main,
                     _ => SessionTarget::Isolated,
                 },
-                enabled: row.get(7)?,
-                created_at: row.get(8)?,
+                enabled,
+                created_at,
                 wake_mode: WakeMode::default(),
                 isolation: None,
                 delete_after_run: false,
-            })
-        })?;
-
-        let mut jobs = Vec::new();
-        for job in job_iter {
-            jobs.push(job?);
+            });
         }
 
         Ok(jobs)
+    }
+
+    fn disable_job(&self, job_id: &str) -> Result<()> {
+        let conn = Connection::open(&self.db_path)?;
+        conn.execute("UPDATE cron_jobs SET enabled = 0 WHERE id = ?1", params![job_id])?;
+        Ok(())
     }
 
     /// Remove a cron job
