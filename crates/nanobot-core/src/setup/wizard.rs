@@ -175,15 +175,49 @@ pub async fn interactive_setup(opts: SetupOptions) -> Result<SetupResult> {
         "Web Chat (Browser)",
         "WebSocket API",
     ];
-    let channel_indices = MultiSelect::with_theme(&ColorfulTheme::default())
-        .with_prompt("Enable messaging channels? (Space to select, Enter to confirm)")
-        .items(&channel_options)
-        .interact()?;
 
-    let mut channels: Vec<String> = channel_indices
-        .into_iter()
-        .map(|i| channel_options[i].to_string())
-        .collect();
+    let mut channels: Vec<String> = if quick_mode {
+        let quick_channel_options = vec![
+            "Telegram",
+            "Discord",
+            "Slack",
+            "Web Chat (Browser)",
+            "WebSocket API",
+            "Teams (Webhook)",
+            "Google Chat (Webhook)",
+            "Choose multiple channels",
+        ];
+
+        let quick_idx = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("Choose your main channel")
+            .items(&quick_channel_options)
+            .default(0)
+            .interact()?;
+
+        if quick_idx == quick_channel_options.len() - 1 {
+            let channel_indices = MultiSelect::with_theme(&ColorfulTheme::default())
+                .with_prompt("Enable messaging channels? (Space to select, Enter to confirm)")
+                .items(&channel_options)
+                .interact()?;
+
+            channel_indices
+                .into_iter()
+                .map(|i| channel_options[i].to_string())
+                .collect()
+        } else {
+            vec![quick_channel_options[quick_idx].to_string()]
+        }
+    } else {
+        let channel_indices = MultiSelect::with_theme(&ColorfulTheme::default())
+            .with_prompt("Enable messaging channels? (Space to select, Enter to confirm)")
+            .items(&channel_options)
+            .interact()?;
+
+        channel_indices
+            .into_iter()
+            .map(|i| channel_options[i].to_string())
+            .collect()
+    };
 
     if quick_mode && channels.is_empty() {
         channels.push("Web Chat (Browser)".to_string());

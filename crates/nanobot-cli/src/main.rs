@@ -2289,6 +2289,7 @@ async fn run_oauth_login(provider: &str) -> Result<()> {
     };
     println!("\n📋 Step 2: After logging in, copy the redirect URL from your browser");
     println!("           (It will look like: {})", redirect_hint);
+    println!("           You can also paste just the query part: code=...&state=...");
     print!("\n📥 Paste the redirect URL here: ");
 
     use std::io::{self, Write};
@@ -2298,8 +2299,36 @@ async fn run_oauth_login(provider: &str) -> Result<()> {
     io::stdin().read_line(&mut redirect_url)?;
     let redirect_url = redirect_url.trim();
 
+    let normalized_redirect = if redirect_url.starts_with("http://")
+        || redirect_url.starts_with("https://")
+    {
+        redirect_url.to_string()
+    } else if redirect_url.starts_with('/') {
+        format!("http://localhost{}", redirect_url)
+    } else if redirect_url.starts_with("code=")
+        || redirect_url.starts_with("?code=")
+        || redirect_url.contains("&code=")
+        || redirect_url.contains("code=")
+    {
+        let query = if let Some((_, q)) = redirect_url.split_once('?') {
+            q
+        } else if let Some(rest) = redirect_url.strip_prefix('?') {
+            rest
+        } else {
+            redirect_url
+        };
+        let base = if canonical_provider == "antigravity" {
+            "http://localhost:51121/oauth-callback"
+        } else {
+            "http://localhost:8080/callback"
+        };
+        format!("{}?{}", base, query)
+    } else {
+        redirect_url.to_string()
+    };
+
     println!("\n⏳ Exchanging code for token...");
-    flow.complete_flow(redirect_url).await?;
+    flow.complete_flow(&normalized_redirect).await?;
 
     println!(
         "✅ Login successful! You can now use the '{}' provider.",

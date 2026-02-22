@@ -600,7 +600,7 @@ dep_satisfied() {
             has_cmd pip3 || python3 -m pip --version >/dev/null 2>&1 || python -m pip --version >/dev/null 2>&1
             ;;
         docker)
-            has_cmd docker || has_cmd docker.io
+            has_cmd docker || has_cmd docker.io || { [ "$PM" = "apt" ] && has_cmd dpkg && dpkg -s docker.io >/dev/null 2>&1; }
             ;;
         docker-compose)
             has_cmd docker-compose || has_cmd docker-compose-plugin || docker compose version >/dev/null 2>&1
@@ -1055,6 +1055,33 @@ run_setup_wizard_if_available() {
         "$HOME/.cargo/bin/nanobot" setup --wizard || log_warn "Setup wizard exited early. You can rerun: nanobot setup --wizard"
     else
         log_warn "nanobot binary not found in PATH yet. Open a new shell and run: nanobot setup --wizard"
+    fi
+}
+
+ensure_path_exports() {
+    export PATH="$HOME/.cargo/bin:$HOME/.deno/bin:$PATH"
+
+    local line='export PATH="$HOME/.cargo/bin:$HOME/.deno/bin:$PATH"'
+    local profile
+    for profile in "$HOME/.profile" "$HOME/.bashrc"; do
+        if [ -f "$profile" ]; then
+            if ! grep -Fq "$line" "$profile"; then
+                printf "\n%s\n" "$line" >> "$profile"
+            fi
+        else
+            printf "%s\n" "$line" > "$profile"
+        fi
+    done
+}
+
+install_global_nanobot_link_if_possible() {
+    local target="$HOME/.cargo/bin/nanobot"
+    if [ ! -x "$target" ]; then
+        return 0
+    fi
+
+    if [ "$(id -u)" -eq 0 ] && [ -d "/usr/local/bin" ]; then
+        ln -sf "$target" "/usr/local/bin/nanobot" >/dev/null 2>&1 || true
     fi
 }
 
@@ -1879,12 +1906,14 @@ else
 fi
 
 mkdir -p "$HOME/.nanobot"
+ensure_path_exports
+install_global_nanobot_link_if_possible
 
 log_ok "Installation complete."
 echo
 echo "Next steps:"
-echo "  1) Ensure PATH includes: $HOME/.cargo/bin"
-echo "  2) Ensure PATH includes: $HOME/.deno/bin (for Deno skills)"
+echo "  1) Open a new shell session (PATH was auto-configured)."
+echo "  2) PATH entries added: $HOME/.cargo/bin and $HOME/.deno/bin"
 echo "  3) Run setup when ready: nanobot setup --wizard"
 echo "  4) Optional offline models: nanobot setup --offline-models"
 echo "  5) Optional browser tools: choose Docker or local Chromium in setup wizard"
