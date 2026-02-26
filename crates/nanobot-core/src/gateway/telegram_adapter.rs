@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use teloxide::prelude::*;
 use tokio::sync::mpsc;
+use tokio::time::{Duration, sleep};
 
 /// Telegram bot configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +68,7 @@ impl TelegramBot {
         let bot = self.bot.clone();
         let agent_tx = self.agent_tx.clone();
         let allowed_users = self.config.allowed_users.clone();
+        let dm_scope = self.config.dm_scope;
         let registry = self.registry.clone();
         let confirmation_service = self.confirmation_service.clone();
         let confirmation_txs = self.confirmation_txs.clone();
@@ -80,7 +82,7 @@ impl TelegramBot {
 
         // 2. Spawn Outbound Handler (Inbox -> Telegram)
         let bot_clone = bot.clone();
-        let outbound_handle = tokio::spawn(async move {
+        let _outbound_handle = tokio::spawn(async move {
             tracing::info!("📤 Telegram Outbound Actor started");
             while let Some(msg) = inbox_rx.recv().await {
                 let chat_id = msg.user_id.replace("telegram:", "").parse::<i64>();
@@ -98,18 +100,28 @@ impl TelegramBot {
             }
         });
 
-        // 3. Run Inbound Poller (Telegram -> Agent)
-        tracing::info!("📥 Telegram Inbound Poller started");
-        teloxide::repl(bot, move |bot: Bot, msg: Message| {
-            let agent_tx = agent_tx.clone();
-            let allowed_users = allowed_users.clone();
-            let confirmation_service = confirmation_service.clone();
-            let confirmation_txs = confirmation_txs.clone();
-            let confirmation_ready = confirmation_ready.clone();
-            let pending_questions = pending_questions.clone();
-            let bot_token = bot_token.clone();
+        // 3. Run Inbound Poller (Telegram -> Agent) with resilient restart/backoff
+        let mut retry_attempt: u32 = 0;
+        loop {
+            tracing::info!("📥 Telegram Inbound Poller started");
+            let agent_tx_loop = agent_tx.clone();
+            let allowed_users_loop = allowed_users.clone();
+            let confirmation_service_loop = confirmation_service.clone();
+            let confirmation_txs_loop = confirmation_txs.clone();
+            let confirmation_ready_loop = confirmation_ready.clone();
+            let pending_questions_loop = pending_questions.clone();
+            let bot_token_loop = bot_token.clone();
 
-            async move {
+            teloxide::repl(bot.clone(), move |bot: Bot, msg: Message| {
+                let agent_tx = agent_tx_loop.clone();
+                let allowed_users = allowed_users_loop.clone();
+                let confirmation_service = confirmation_service_loop.clone();
+                let confirmation_txs = confirmation_txs_loop.clone();
+                let confirmation_ready = confirmation_ready_loop.clone();
+                let pending_questions = pending_questions_loop.clone();
+                let bot_token = bot_token_loop.clone();
+
+                async move {
                 let ingress_at = std::time::Instant::now();
                 let user_id = msg.chat.id.0.to_string();
                 let username = msg.chat.username().map(|s| s.to_string());
@@ -240,7 +252,7 @@ impl TelegramBot {
                     "telegram",
                     &msg.chat.id.0.to_string(),
                     &user_id,
-                    self.config.dm_scope,
+                    dm_scope,
                     msg.chat.is_private(),
                 );
 
@@ -368,13 +380,30 @@ impl TelegramBot {
                 if !full.is_empty() { let _ = bot.send_message(msg.chat.id, full).await; }
 
                 Ok(())
-            }
-        }).await;
+                }
+            })
+            .await;
 
-        // If repl exits, abort outbound
-        outbound_handle.abort();
-        Ok(())
+            let delay = next_poll_retry_delay(retry_attempt);
+            retry_attempt = retry_attempt.saturating_add(1);
+            tracing::warn!(
+                "Telegram poller exited unexpectedly; restarting in {}s",
+                delay.as_secs()
+            );
+            sleep(delay).await;
+        }
     }
+}
+
+fn next_poll_retry_delay(attempt: u32) -> Duration {
+    let capped_attempt = attempt.min(6);
+    let base_secs = 1u64 << capped_attempt;
+    let jitter_ms = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_millis())
+        .unwrap_or(0)
+        % 600) as u64;
+    Duration::from_secs(base_secs.min(30)) + Duration::from_millis(jitter_ms)
 }
 
 fn parse_confirmation_response(text: &str) -> Option<(bool, String)> {
