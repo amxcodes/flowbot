@@ -1,4 +1,4 @@
-use crate::config::{Config, TelegramConfig};
+use crate::config::{Config, InteractionPolicy, Providers, TelegramConfig};
 use anyhow::{Context, Result};
 use console::style;
 use dialoguer::{Confirm, Input, theme::ColorfulTheme};
@@ -57,13 +57,29 @@ pub async fn run_telegram_setup_wizard() -> Result<()> {
         Err(_) => {
             println!(
                 "{}",
-                style("⚠️  Config file not found. Creating new config.").yellow()
+                style("⚠️  Config file not found. Creating a minimal config first.").yellow()
             );
-            // Create default config structure
-            // In a real scenario we might want a default constructor
-            return Err(anyhow::anyhow!(
-                "Config file not found. Run 'nanobot setup' first to create the workspace and config."
-            ));
+            Config {
+                default_provider: "openai".to_string(),
+                providers: Providers {
+                    openrouter: None,
+                    antigravity: None,
+                    openai: None,
+                    telegram: None,
+                    teams: None,
+                    google_chat: None,
+                    google: None,
+                    slack: None,
+                    discord: None,
+                },
+                llm: None,
+                interaction_policy: InteractionPolicy::Interactive,
+                audit_log_path: None,
+                mcp: None,
+                browser: None,
+                context_token_limit: 32_000,
+                session: crate::config::SessionConfig::default(),
+            }
         }
     };
 
